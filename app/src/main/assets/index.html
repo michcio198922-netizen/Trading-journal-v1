@@ -161,6 +161,16 @@
           </div>
         </article>
 
+        <article class="panel playbook-performance-panel">
+          <div class="panel-head">
+            <div>
+              <h3>Playbook performance</h3>
+              <p>Wyniki trade'ów przypisanych do Twoich setupów z playbooka</p>
+            </div>
+          </div>
+          <div id="playbookStats" class="edge-table empty-state">Brak playbooków do analizy.</div>
+        </article>
+
         <article class="panel">
           <div class="panel-head">
             <div>
@@ -218,11 +228,21 @@
             </label>
           </div>
 
-          <label class="field">
-            <span>Setup / model wejścia</span>
-            <input id="tradeModel" type="text" maxlength="80" placeholder="np. MSS + FVG, IFVG Reclaim, AMD, Silver Bullet" required />
-            <small class="field-hint">Wpisz nazwę modelu, którego użyłeś w tym trade.</small>
-          </label>
+          <div class="form-grid two">
+            <label class="field">
+              <span>Playbook</span>
+              <select id="tradePlaybook">
+                <option value="">Bez playbooka</option>
+              </select>
+              <small class="field-hint">Wybierz gotowy setup. Aplikacja podpowie model, kierunek, sesję i plan.</small>
+            </label>
+            <label class="field">
+              <span>Setup / model wejścia</span>
+              <input id="tradeModel" type="text" maxlength="80" placeholder="np. MSS + FVG, IFVG Reclaim, AMD, Silver Bullet" required />
+              <small class="field-hint">Możesz użyć playbooka albo wpisać model ręcznie.</small>
+            </label>
+          </div>
+          <div id="selectedPlaybookPreview" class="playbook-mini-preview empty-state">Nie wybrano playbooka.</div>
 
           <div class="field-group pretrade-block">
             <span class="group-label">Pre-Trade Plan</span>
@@ -354,6 +374,99 @@
         </form>
       </section>
 
+      <section id="view-playbook" class="view">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Twoje modele A+</p>
+            <h2>Playbook setupów</h2>
+          </div>
+        </div>
+
+        <article class="panel playbook-intro">
+          <strong>Jedno miejsce na Twoje powtarzalne setupy.</strong>
+          <p>Zapisz warunki, invalidation, target i przykład. Potem przypisuj trade'y do konkretnego playbooka i sprawdzaj, który naprawdę ma edge.</p>
+        </article>
+
+        <form id="playbookForm" class="panel form-panel" autocomplete="off">
+          <input id="playbookEditId" type="hidden" />
+          <div class="form-grid two">
+            <label class="field">
+              <span>Nazwa setupu</span>
+              <input id="playbookName" type="text" maxlength="80" placeholder="np. NY Sweep + MSS + FVG" required />
+            </label>
+            <label class="field">
+              <span>Kierunek</span>
+              <select id="playbookDirection">
+                <option value="ANY">LONG lub SHORT</option>
+                <option value="LONG">Tylko LONG</option>
+                <option value="SHORT">Tylko SHORT</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="form-grid two">
+            <label class="field">
+              <span>Preferowana sesja</span>
+              <select id="playbookSession">
+                <option value="ANY">Dowolna</option>
+                <option value="New York">New York</option>
+                <option value="London">London</option>
+                <option value="Asia">Asia</option>
+                <option value="Inna">Inna</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Minimalne RR</span>
+              <input id="playbookMinRR" type="number" step="0.1" min="0" inputmode="decimal" placeholder="np. 2" />
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Warunki wejścia / checklista</span>
+            <textarea id="playbookConditions" rows="5" maxlength="1400" placeholder="Np. HTF bias zgodny, sweep liquidity, displacement, MSS, wejście z FVG..."></textarea>
+          </label>
+
+          <div class="form-grid two">
+            <label class="field">
+              <span>Invalidation</span>
+              <textarea id="playbookInvalidation" rows="3" maxlength="500" placeholder="Co unieważnia setup?"></textarea>
+            </label>
+            <label class="field">
+              <span>Target / logika wyjścia</span>
+              <textarea id="playbookTarget" rows="3" maxlength="500" placeholder="Gdzie jest target i dlaczego?"></textarea>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>Notatka do modelu</span>
+            <textarea id="playbookNote" rows="4" maxlength="900" placeholder="Timing, czego unikać, dodatkowe uwagi..."></textarea>
+          </label>
+
+          <div class="field-group">
+            <span class="group-label">Przykładowy screenshot idealnego setupu</span>
+            <label class="upload-box" for="playbookImage">
+              <input id="playbookImage" type="file" accept="image/*" />
+              <span class="upload-title">Dodaj / zmień przykład</span>
+              <small>Jeden obrazek referencyjny dla tego setupu.</small>
+            </label>
+            <div id="playbookImagePreview" class="screenshot-grid preview-grid empty-state">Nie wybrano obrazka.</div>
+          </div>
+
+          <div class="playbook-form-actions">
+            <button id="playbookSaveBtn" class="primary-btn" type="submit">Zapisz playbook</button>
+            <button id="playbookCancelEdit" class="ghost-btn" type="button" hidden>Anuluj edycję</button>
+          </div>
+        </form>
+
+        <div class="section-head playbook-list-head">
+          <div>
+            <p class="eyebrow">Biblioteka</p>
+            <h2>Twoje setupy</h2>
+          </div>
+        </div>
+        <div id="playbookList" class="playbook-list empty-state">Nie masz jeszcze żadnego playbooka.</div>
+      </section>
+
       <section id="view-history" class="view">
         <div class="section-head">
           <div>
@@ -371,6 +484,7 @@
             <select id="historyInstrument" class="compact-select"><option value="ALL">Instrument: wszystkie</option><option>NQ</option><option>MNQ</option><option>ES</option></select>
             <select id="historySession" class="compact-select"><option value="ALL">Sesja: wszystkie</option><option>New York</option><option>London</option><option>Asia</option><option>Inna</option></select>
             <select id="historyDirection" class="compact-select"><option value="ALL">Kierunek: oba</option><option>LONG</option><option>SHORT</option></select>
+            <select id="historyPlaybook" class="compact-select"><option value="ALL">Playbook: wszystkie</option><option value="NONE">Bez playbooka</option></select>
           </div>
         </div>
         <div id="historyList" class="trade-list empty-state">Brak zapisanych trade'ów.</div>
@@ -448,6 +562,9 @@
       </button>
       <button class="nav-btn" data-view="add" type="button">
         <span class="nav-icon">＋</span><span>Trade</span>
+      </button>
+      <button class="nav-btn" data-view="playbook" type="button">
+        <span class="nav-icon">◆</span><span>Playbook</span>
       </button>
       <button class="nav-btn" data-view="history" type="button">
         <span class="nav-icon">≡</span><span>Historia</span>

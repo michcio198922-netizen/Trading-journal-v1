@@ -10,8 +10,8 @@ android {
         applicationId = "pl.smcjournal.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "5.2"
+        versionCode = 9
+        versionName = "5.3"
     }
 
     signingConfigs {

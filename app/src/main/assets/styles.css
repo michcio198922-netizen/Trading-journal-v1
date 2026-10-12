@@ -116,7 +116,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .review-card dt { color: var(--accent); font-size: 11px; text-transform: uppercase; font-weight: 900; margin-top: 10px; }
 .review-card dd { margin: 4px 0 0; color: #bbc4d3; line-height: 1.45; white-space: pre-wrap; }
 
-.bottom-nav { position: fixed; z-index: 30; left: 50%; transform: translateX(-50%); bottom: 0; width: min(900px, 100%); display: grid; grid-template-columns: repeat(4,1fr); border-top: 1px solid var(--border); background: rgba(10,13,19,.96); backdrop-filter: blur(18px); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
+.bottom-nav { position: fixed; z-index: 30; left: 50%; transform: translateX(-50%); bottom: 0; width: min(900px, 100%); display: grid; grid-template-columns: repeat(5,1fr); border-top: 1px solid var(--border); background: rgba(10,13,19,.96); backdrop-filter: blur(18px); padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); }
 .nav-btn { border: 0; background: transparent; color: #768195; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px; font-size: 10px; font-weight: 800; cursor: pointer; }
 .nav-btn.active { color: #dfe5ff; }
 .nav-icon { font-size: 22px; line-height: 1; }
@@ -224,4 +224,43 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .weekly-insights { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .weekly-insights > div { display:block; border-top:0; border-left:1px solid rgba(255,255,255,.055); padding:4px 0 4px 12px; }
   .weekly-insights strong { display:block; text-align:left; margin-top:5px; }
+}
+
+
+/* v5.3 — Playbook setupów */
+.playbook-performance-panel { border-color: rgba(111,140,255,.22); }
+.playbook-intro strong { font-size:15px; }
+.playbook-intro p { margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
+.playbook-mini-preview { border:1px solid rgba(111,140,255,.22); background:rgba(111,140,255,.045); border-radius:14px; padding:12px; color:#b9c3d4; font-size:12px; line-height:1.45; text-align:left; }
+.playbook-mini-preview.empty-state { text-align:center; padding:14px; }
+.playbook-mini-preview strong { color:#e3e8ff; }
+.playbook-form-actions { display:flex; gap:10px; flex-wrap:wrap; }
+.playbook-form-actions .primary-btn, .playbook-form-actions .ghost-btn { flex:1 1 160px; }
+.playbook-list-head { margin-top:22px; }
+.playbook-list { display:flex; flex-direction:column; gap:12px; }
+.playbook-card { border:1px solid var(--border); border-radius:17px; background:#0c1118; overflow:hidden; }
+.playbook-card-main { display:grid; grid-template-columns:120px minmax(0,1fr); gap:14px; padding:14px; }
+.playbook-cover { width:120px; height:120px; border-radius:14px; overflow:hidden; border:1px solid var(--border); background:#0b0f16; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:11px; text-align:center; }
+.playbook-cover img { width:100%; height:100%; object-fit:cover; display:block; cursor:pointer; }
+.playbook-title-row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.playbook-title-row h3 { margin:0; font-size:17px; letter-spacing:-.025em; }
+.playbook-meta { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.playbook-copy { margin:10px 0 0; color:#b6c0cf; font-size:12px; line-height:1.5; white-space:pre-wrap; }
+.playbook-copy b { color:#dce3ef; }
+.playbook-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border-top:1px solid var(--border); background:#0a0f15; }
+.playbook-stat { padding:10px 8px; text-align:center; border-right:1px solid rgba(255,255,255,.05); }
+.playbook-stat:last-child { border-right:0; }
+.playbook-stat span { display:block; color:var(--muted); font-size:9px; text-transform:uppercase; font-weight:900; letter-spacing:.04em; }
+.playbook-stat strong { display:block; margin-top:4px; font-size:13px; }
+.playbook-card-actions { display:flex; gap:8px; padding:10px 14px 14px; justify-content:flex-end; }
+.playbook-badge { display:inline-flex; align-items:center; padding:4px 8px; border-radius:999px; font-size:10px; font-weight:900; color:#cbd5ff; background:rgba(111,140,255,.10); border:1px solid rgba(111,140,255,.25); }
+.playbook-badge::before { content:'◆ '; }
+@media (max-width:560px) {
+  .playbook-card-main { grid-template-columns:1fr; }
+  .playbook-cover { width:100%; height:auto; aspect-ratio:16/9; }
+  .playbook-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .playbook-stat:nth-child(2) { border-right:0; }
+  .playbook-stat:nth-child(-n+2) { border-bottom:1px solid rgba(255,255,255,.05); }
+  .bottom-nav .nav-btn { font-size:9px; }
+  .nav-icon { font-size:20px; }
 }

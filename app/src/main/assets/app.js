@@ -1,6 +1,7 @@
 const STORAGE = {
   trades: 'smcJournal.trades.v1',
-  reviews: 'smcJournal.reviews.v1'
+  reviews: 'smcJournal.reviews.v1',
+  playbooks: 'smcJournal.playbooks.v1'
 };
 
 const IMAGE_DB = {
@@ -21,6 +22,8 @@ const CONFLUENCES = [
 
 let trades = migrateTrades(readJson(STORAGE.trades, []));
 let reviews = readJson(STORAGE.reviews, []);
+let playbooks = migratePlaybooks(readJson(STORAGE.playbooks, []));
+let pendingPlaybookImageData = null;
 let deferredInstallPrompt = null;
 let imageDbPromise = null;
 
@@ -38,9 +41,11 @@ function init() {
   bindTradeForm();
   bindHistory();
   bindReviewForm();
+  bindPlaybookForm();
   bindBackup();
   bindScreenshotPreview();
   bindLightbox();
+  renderPlaybookSelect();
   renderAll();
 }
 
@@ -59,6 +64,8 @@ function migrateTrades(source) {
     direction: trade.direction || '',
     session: trade.session || '',
     model: trade.model || '',
+    playbookId: trade.playbookId || '',
+    playbookName: trade.playbookName || '',
     rr: Number.isFinite(Number(trade.rr)) ? Number(trade.rr) : (trade.result === 'TP' ? 1 : trade.result === 'SL' ? -1 : 0),
     confluences: Array.isArray(trade.confluences) ? trade.confluences : [],
     rating: Number(trade.rating || 3),
@@ -75,6 +82,27 @@ function migrateTrades(source) {
     screenshotCount: Number(trade.screenshotCount || 0),
     createdAt: trade.createdAt || new Date().toISOString()
   }));
+}
+
+function migratePlaybooks(source) {
+  return (Array.isArray(source) ? source : []).map((item) => ({
+    id: item.id || cryptoRandomId(),
+    name: String(item.name || '').trim(),
+    direction: item.direction || 'ANY',
+    session: item.session || 'ANY',
+    minRR: item.minRR === '' || item.minRR == null ? null : Number(item.minRR),
+    conditions: item.conditions || '',
+    invalidation: item.invalidation || '',
+    target: item.target || '',
+    note: item.note || '',
+    hasImage: Boolean(item.hasImage),
+    createdAt: item.createdAt || new Date().toISOString(),
+    updatedAt: item.updatedAt || item.createdAt || new Date().toISOString()
+  })).filter(item => item.name);
+}
+
+function savePlaybooks() {
+  localStorage.setItem(STORAGE.playbooks, JSON.stringify(playbooks));
 }
 
 function saveTrades() {
@@ -108,6 +136,7 @@ function switchView(name) {
   navButtons.forEach(b => b.classList.toggle('active', b.dataset.view === name));
   if (name === 'dashboard') renderDashboard();
   if (name === 'history') renderHistory();
+  if (name === 'playbook') renderPlaybooks();
   if (name === 'review') renderReviews();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
@@ -131,6 +160,8 @@ function bindTradeForm() {
       return;
     }
 
+    const selectedPlaybookId = $('tradePlaybook').value;
+    const selectedPlaybook = playbooks.find(p => p.id === selectedPlaybookId);
     const model = $('tradeModel').value.trim();
     if (!model) {
       toast('Wpisz setup / model wejścia.');
@@ -153,6 +184,8 @@ function bindTradeForm() {
       direction,
       session: $('tradeSession').value,
       model,
+      playbookId: selectedPlaybook?.id || '',
+      playbookName: selectedPlaybook?.name || '',
       result,
       rr,
       confluences: selectedConfluences,
@@ -181,6 +214,8 @@ function bindTradeForm() {
       trades.sort(sortTradesAsc);
       saveTrades();
       $('tradeForm').reset();
+      $('tradePlaybook').value = '';
+      renderSelectedPlaybookPreview();
       setDefaultDate();
       setRating(3);
       clearScreenshotPreview();
@@ -202,7 +237,7 @@ function setRating(value) {
 }
 
 function bindHistory() {
-  ['historyFilter','historyInstrument','historySession','historyDirection'].forEach(id => $(id).addEventListener('change', renderHistory));
+  ['historyFilter','historyInstrument','historySession','historyDirection','historyPlaybook'].forEach(id => $(id).addEventListener('change', renderHistory));
   $('historyList').addEventListener('click', async (event) => {
     const button = event.target.closest('[data-delete-trade]');
     if (button) {
@@ -226,6 +261,293 @@ function bindHistory() {
     const image = event.target.closest('[data-shot-src]');
     if (image) openLightbox(image.dataset.shotSrc);
   });
+}
+
+
+function bindPlaybookForm() {
+  const form = $('playbookForm');
+  if (!form) return;
+
+  $('tradePlaybook').addEventListener('change', () => {
+    applySelectedPlaybookToTrade();
+    renderSelectedPlaybookPreview();
+  });
+
+  $('playbookImage').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      pendingPlaybookImageData = await fileToCompressedDataUrl(file);
+      renderPlaybookImagePreview(pendingPlaybookImageData);
+    } catch (error) {
+      console.error(error);
+      toast('Nie udało się wczytać obrazka playbooka.');
+    }
+  });
+
+  $('playbookImagePreview').addEventListener('click', (event) => {
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = $('playbookName').value.trim();
+    if (!name) {
+      toast('Wpisz nazwę setupu.');
+      return;
+    }
+
+    const editId = $('playbookEditId').value;
+    const existing = playbooks.find(p => p.id === editId);
+    const id = existing?.id || cryptoRandomId();
+    const minRRRaw = $('playbookMinRR').value.trim();
+    const item = {
+      id,
+      name,
+      direction: $('playbookDirection').value,
+      session: $('playbookSession').value,
+      minRR: minRRRaw === '' ? null : Number(String(minRRRaw).replace(',', '.')),
+      conditions: $('playbookConditions').value.trim(),
+      invalidation: $('playbookInvalidation').value.trim(),
+      target: $('playbookTarget').value.trim(),
+      note: $('playbookNote').value.trim(),
+      hasImage: Boolean(existing?.hasImage || pendingPlaybookImageData),
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (item.minRR != null && !Number.isFinite(item.minRR)) {
+      toast('Minimalne RR musi być liczbą.');
+      return;
+    }
+
+    if (existing) {
+      playbooks = playbooks.map(p => p.id === id ? item : p);
+    } else {
+      playbooks.push(item);
+    }
+
+    if (pendingPlaybookImageData) {
+      await savePlaybookImage(id, pendingPlaybookImageData);
+      item.hasImage = true;
+    }
+
+    playbooks.sort((a,b) => a.name.localeCompare(b.name, 'pl'));
+    savePlaybooks();
+    resetPlaybookForm();
+    renderPlaybooks();
+    renderPlaybookSelect();
+    renderPlaybookStats();
+    toast(existing ? 'Playbook zaktualizowany.' : 'Playbook zapisany.');
+  });
+
+  $('playbookCancelEdit').addEventListener('click', resetPlaybookForm);
+
+  $('playbookList').addEventListener('click', async (event) => {
+    const editBtn = event.target.closest('[data-edit-playbook]');
+    if (editBtn) {
+      await editPlaybook(editBtn.dataset.editPlaybook);
+      return;
+    }
+
+    const deleteBtn = event.target.closest('[data-delete-playbook]');
+    if (deleteBtn) {
+      const id = deleteBtn.dataset.deletePlaybook;
+      const item = playbooks.find(p => p.id === id);
+      if (!item) return;
+      if (!confirm(`Usunąć playbook „${item.name}”? Historyczne trade'y zostaną w journalu.`)) return;
+      playbooks = playbooks.filter(p => p.id !== id);
+      savePlaybooks();
+      await deletePlaybookImage(id);
+      resetPlaybookForm();
+      renderPlaybooks();
+      renderPlaybookSelect();
+      renderPlaybookStats();
+      toast('Playbook usunięty.');
+      return;
+    }
+
+    const useBtn = event.target.closest('[data-use-playbook]');
+    if (useBtn) {
+      switchView('add');
+      $('tradePlaybook').value = useBtn.dataset.usePlaybook;
+      applySelectedPlaybookToTrade();
+      renderSelectedPlaybookPreview();
+      return;
+    }
+
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+}
+
+function renderPlaybookSelect() {
+  const select = $('tradePlaybook');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = `<option value="">Bez playbooka</option>${playbooks.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')}`;
+  if (playbooks.some(p => p.id === current)) select.value = current;
+
+  const historySelect = $('historyPlaybook');
+  if (historySelect) {
+    const historyCurrent = historySelect.value || 'ALL';
+    historySelect.innerHTML = `<option value="ALL">Playbook: wszystkie</option><option value="NONE">Bez playbooka</option>${playbooks.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')}`;
+    if (historyCurrent === 'NONE' || historyCurrent === 'ALL' || playbooks.some(p => p.id === historyCurrent)) historySelect.value = historyCurrent;
+  }
+  renderSelectedPlaybookPreview();
+}
+
+function applySelectedPlaybookToTrade() {
+  const id = $('tradePlaybook')?.value;
+  const p = playbooks.find(item => item.id === id);
+  if (!p) return;
+  $('tradeModel').value = p.name;
+  if (p.direction === 'LONG') $('directionLong').checked = true;
+  if (p.direction === 'SHORT') $('directionShort').checked = true;
+  if (p.session && p.session !== 'ANY') $('tradeSession').value = p.session;
+  $('preInvalidation').value = p.invalidation || '';
+  $('preTarget').value = p.target || '';
+  $('preThesis').value = p.conditions || '';
+}
+
+function renderSelectedPlaybookPreview() {
+  const target = $('selectedPlaybookPreview');
+  if (!target) return;
+  const p = playbooks.find(item => item.id === $('tradePlaybook')?.value);
+  if (!p) {
+    target.textContent = 'Nie wybrano playbooka.';
+    target.classList.add('empty-state');
+    return;
+  }
+  target.classList.remove('empty-state');
+  target.innerHTML = `<strong>${escapeHtml(p.name)}</strong> • ${p.direction === 'ANY' ? 'oba kierunki' : escapeHtml(p.direction)} • ${p.session === 'ANY' ? 'dowolna sesja' : escapeHtml(p.session)}${p.minRR != null ? ` • min. ${escapeHtml(p.minRR)}R` : ''}${p.conditions ? `<br>${escapeHtml(shortenText(p.conditions, 180))}` : ''}`;
+}
+
+async function editPlaybook(id) {
+  const p = playbooks.find(item => item.id === id);
+  if (!p) return;
+  $('playbookEditId').value = p.id;
+  $('playbookName').value = p.name;
+  $('playbookDirection').value = p.direction || 'ANY';
+  $('playbookSession').value = p.session || 'ANY';
+  $('playbookMinRR').value = p.minRR == null ? '' : String(p.minRR);
+  $('playbookConditions').value = p.conditions || '';
+  $('playbookInvalidation').value = p.invalidation || '';
+  $('playbookTarget').value = p.target || '';
+  $('playbookNote').value = p.note || '';
+  pendingPlaybookImageData = null;
+  const currentImage = await getPlaybookImage(p.id);
+  renderPlaybookImagePreview(currentImage);
+  $('playbookSaveBtn').textContent = 'Zapisz zmiany';
+  $('playbookCancelEdit').hidden = false;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function resetPlaybookForm() {
+  $('playbookForm')?.reset();
+  if ($('playbookEditId')) $('playbookEditId').value = '';
+  pendingPlaybookImageData = null;
+  if ($('playbookSaveBtn')) $('playbookSaveBtn').textContent = 'Zapisz playbook';
+  if ($('playbookCancelEdit')) $('playbookCancelEdit').hidden = true;
+  renderPlaybookImagePreview('');
+}
+
+function renderPlaybookImagePreview(src) {
+  const target = $('playbookImagePreview');
+  if (!target) return;
+  if (!src) {
+    target.innerHTML = 'Nie wybrano obrazka.';
+    target.classList.add('empty-state');
+    return;
+  }
+  target.classList.remove('empty-state');
+  target.innerHTML = `<button type="button" class="shot-thumb preview-thumb" data-shot-src="${src}" aria-label="Podgląd przykładu playbooka"><img src="${src}" alt="Przykład setupu" /></button>`;
+}
+
+async function renderPlaybooks() {
+  const target = $('playbookList');
+  if (!target) return;
+  if (!playbooks.length) {
+    target.textContent = 'Nie masz jeszcze żadnego playbooka.';
+    target.classList.add('empty-state');
+    return;
+  }
+  target.classList.remove('empty-state');
+  const rows = await Promise.all(playbooks.map(async (p) => {
+    const sample = getTradesForPlaybook(p);
+    const edge = buildEdgeRow(p.name, sample);
+    const image = p.hasImage ? await getPlaybookImage(p.id) : '';
+    return `<article class="playbook-card">
+      <div class="playbook-card-main">
+        <div class="playbook-cover">${image ? `<img src="${image}" data-shot-src="${image}" alt="Przykład ${escapeHtml(p.name)}" />` : 'Brak przykładu'}</div>
+        <div>
+          <div class="playbook-title-row"><h3>${escapeHtml(p.name)}</h3><span class="playbook-badge">PLAYBOOK</span></div>
+          <div class="playbook-meta">
+            <span class="mini-chip">${p.direction === 'ANY' ? 'LONG / SHORT' : escapeHtml(p.direction)}</span>
+            <span class="mini-chip">${p.session === 'ANY' ? 'Dowolna sesja' : escapeHtml(p.session)}</span>
+            ${p.minRR != null ? `<span class="mini-chip">Min. ${escapeHtml(p.minRR)}R</span>` : ''}
+          </div>
+          ${p.conditions ? `<p class="playbook-copy"><b>Warunki:</b> ${escapeHtml(p.conditions)}</p>` : ''}
+          ${p.invalidation ? `<p class="playbook-copy"><b>Invalidation:</b> ${escapeHtml(p.invalidation)}</p>` : ''}
+          ${p.target ? `<p class="playbook-copy"><b>Target:</b> ${escapeHtml(p.target)}</p>` : ''}
+          ${p.note ? `<p class="playbook-copy"><b>Uwagi:</b> ${escapeHtml(p.note)}</p>` : ''}
+        </div>
+      </div>
+      <div class="playbook-stats">
+        <div class="playbook-stat"><span>Trade'y</span><strong>${edge.count}</strong></div>
+        <div class="playbook-stat"><span>Win rate</span><strong>${Math.round(edge.winRate)}%</strong></div>
+        <div class="playbook-stat"><span>Śr. R</span><strong class="${metricClass(edge.avgR)}">${formatR(edge.avgR)}</strong></div>
+        <div class="playbook-stat"><span>Łącznie</span><strong class="${metricClass(edge.totalR)}">${formatR(edge.totalR)}</strong></div>
+      </div>
+      <div class="playbook-card-actions">
+        <button class="ghost-btn" type="button" data-use-playbook="${escapeHtml(p.id)}">Użyj w trade</button>
+        <button class="ghost-btn" type="button" data-edit-playbook="${escapeHtml(p.id)}">Edytuj</button>
+        <button class="danger-btn" type="button" data-delete-playbook="${escapeHtml(p.id)}">Usuń</button>
+      </div>
+    </article>`;
+  }));
+  target.innerHTML = rows.join('');
+}
+
+function renderPlaybookStats() {
+  const target = $('playbookStats');
+  if (!target) return;
+  const rows = playbooks.map(p => buildEdgeRow(p.name, getTradesForPlaybook(p)))
+    .filter(row => row.count > 0)
+    .sort((a,b) => b.avgR - a.avgR || b.totalR - a.totalR || b.count - a.count);
+  renderEdgeRows('playbookStats', rows, 12);
+}
+
+function getTradesForPlaybook(playbook) {
+  const normalized = normalizeText(playbook.name);
+  return trades.filter(t => t.playbookId === playbook.id || (!t.playbookId && normalizeText(t.model) === normalized));
+}
+
+function resolvePlaybookName(id) {
+  return playbooks.find(p => p.id === id)?.name || '';
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLocaleLowerCase('pl-PL');
+}
+
+function shortenText(value, max) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function metricClass(value) {
+  return value > 0 ? 'metric-positive' : value < 0 ? 'metric-negative' : 'metric-flat';
+}
+
+async function collectPlaybookImages() {
+  const result = {};
+  for (const p of playbooks) {
+    const src = await getPlaybookImage(p.id);
+    if (src) result[p.id] = src;
+  }
+  return result;
 }
 
 function bindBackup() {
@@ -304,12 +626,14 @@ async function buildBackupPayload() {
 
   return {
     type: 'SMC_TRADING_JOURNAL_BACKUP',
-    schemaVersion: 1,
-    appVersion: '5.1',
+    schemaVersion: 2,
+    appVersion: '5.3',
     exportedAt: new Date().toISOString(),
     trades,
     reviews,
-    screenshots
+    playbooks,
+    screenshots,
+    playbookImages: await collectPlaybookImages()
   };
 }
 
@@ -319,7 +643,10 @@ async function restoreBackup(rawJson) {
     throw new Error('Nieprawidłowy format backupu');
   }
 
-  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów i ${parsed.reviews.length} review?`)) {
+  const importedPlaybooks = migratePlaybooks(Array.isArray(parsed.playbooks) ? parsed.playbooks : []);
+  const playbookImages = parsed.playbookImages && typeof parsed.playbookImages === 'object' ? parsed.playbookImages : {};
+
+  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów, ${parsed.reviews.length} review i ${importedPlaybooks.length} playbooków?`)) {
     toast('Import anulowany.');
     return;
   }
@@ -334,11 +661,23 @@ async function restoreBackup(rawJson) {
     if (shots.length) await saveTradeScreenshots(trade.id, shots);
     trade.screenshotCount = shots.length;
   }
+  for (const playbook of importedPlaybooks) {
+    const src = typeof playbookImages[playbook.id] === 'string' ? playbookImages[playbook.id] : '';
+    if (src) {
+      await savePlaybookImage(playbook.id, src);
+      playbook.hasImage = true;
+    } else {
+      playbook.hasImage = false;
+    }
+  }
 
   trades = importedTrades.sort(sortTradesAsc);
   reviews = importedReviews;
+  playbooks = importedPlaybooks;
   saveTrades();
   saveReviews();
+  savePlaybooks();
+  renderPlaybookSelect();
   renderAll();
   toast('Backup przywrócony.');
 }
@@ -435,6 +774,8 @@ function renderAll() {
   renderDashboard();
   renderHistory();
   renderReviews();
+  renderPlaybooks();
+  renderPlaybookSelect();
 }
 
 function renderDashboard() {
@@ -476,6 +817,7 @@ function renderDashboard() {
   $('recentTrades').classList.toggle('empty-state', latest.length === 0);
   renderWeeklyDashboard();
   renderEdgeAnalytics();
+  renderPlaybookStats();
   drawEquityChart();
   hydrateVisibleScreenshots();
 }
@@ -594,12 +936,14 @@ function renderHistory() {
   const instrument = $('historyInstrument').value;
   const session = $('historySession').value;
   const direction = $('historyDirection').value;
+  const playbook = $('historyPlaybook').value;
   const list = [...trades].filter(t => {
     const resultOk = filter === 'ALL' || (filter === 'MISTAKE' ? t.mistake : t.result === filter);
     const instrumentOk = instrument === 'ALL' || t.instrument === instrument;
     const sessionOk = session === 'ALL' || t.session === session;
     const directionOk = direction === 'ALL' || t.direction === direction;
-    return resultOk && instrumentOk && sessionOk && directionOk;
+    const playbookOk = playbook === 'ALL' || (playbook === 'NONE' ? !t.playbookId : t.playbookId === playbook);
+    return resultOk && instrumentOk && sessionOk && directionOk && playbookOk;
   }).sort(sortTradesDesc);
   $('historyList').innerHTML = list.length ? list.map(t => tradeCardHtml(t, true)).join('') : 'Brak trade\'ów dla wybranego filtra.';
   $('historyList').classList.toggle('empty-state', list.length === 0);
@@ -619,6 +963,7 @@ function tradeCardHtml(trade, deletable) {
             <span class="result-badge ${trade.result}">${trade.result}</span>
             <span>${escapeHtml(trade.instrument || 'NQ')}</span>
             ${trade.direction ? `<span class="direction-badge ${trade.direction}">${escapeHtml(trade.direction)}</span>` : ''}
+            ${(trade.playbookName || resolvePlaybookName(trade.playbookId)) ? `<span class="playbook-badge">${escapeHtml(trade.playbookName || resolvePlaybookName(trade.playbookId))}</span>` : ''}
             <span class="rr-badge ${tradeToR(trade) > 0 ? 'positive' : tradeToR(trade) < 0 ? 'negative' : 'flat'}">${formatR(tradeToR(trade))}</span>
             <span>Setup ${Number(trade.rating || 0)}/5</span>
             ${trade.mistake ? '<span class="mistake-badge">BŁĄD</span>' : '<span class="mistake-badge clean">PLAN</span>'}
@@ -988,6 +1333,24 @@ async function deleteTradeScreenshots(tradeId) {
     tx.oncomplete = () => resolve(true);
     tx.onerror = () => reject(tx.error);
   }).catch(() => false);
+}
+
+
+function playbookImageKey(playbookId) {
+  return `playbook:${playbookId}`;
+}
+
+async function savePlaybookImage(playbookId, src) {
+  return saveTradeScreenshots(playbookImageKey(playbookId), src ? [src] : []);
+}
+
+async function getPlaybookImage(playbookId) {
+  const images = await getTradeScreenshots(playbookImageKey(playbookId));
+  return images[0] || '';
+}
+
+async function deletePlaybookImage(playbookId) {
+  return deleteTradeScreenshots(playbookImageKey(playbookId));
 }
 
 async function clearAllScreenshots() {
