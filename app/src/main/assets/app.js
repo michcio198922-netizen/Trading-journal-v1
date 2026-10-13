@@ -39,6 +39,7 @@ function init() {
   setRating(3);
   bindNavigation();
   bindTradeForm();
+  bindConfirmationFilter();
   bindHistory();
   bindReviewForm();
   bindPlaybookForm();
@@ -79,6 +80,7 @@ function migrateTrades(source) {
     preInvalidation: trade.preInvalidation || '',
     preTarget: trade.preTarget || '',
     preMaxRisk: Number.isFinite(Number(trade.preMaxRisk)) ? Number(trade.preMaxRisk) : null,
+    confirmationFilter: normalizeConfirmationFilter(trade.confirmationFilter),
     screenshotCount: Number(trade.screenshotCount || 0),
     createdAt: trade.createdAt || new Date().toISOString()
   }));
@@ -200,6 +202,7 @@ function bindTradeForm() {
       preInvalidation: $('preInvalidation').value.trim(),
       preTarget: $('preTarget').value.trim(),
       preMaxRisk: $('preMaxRisk').value === '' ? null : Number(String($('preMaxRisk').value).replace(',', '.')),
+      confirmationFilter: getConfirmationFilterState(),
       screenshotCount: screenshotFiles.length,
       createdAt: new Date().toISOString()
     };
@@ -214,6 +217,7 @@ function bindTradeForm() {
       trades.sort(sortTradesAsc);
       saveTrades();
       $('tradeForm').reset();
+      renderConfirmationFilter();
       $('tradePlaybook').value = '';
       renderSelectedPlaybookPreview();
       setDefaultDate();
@@ -227,6 +231,101 @@ function bindTradeForm() {
       toast('Nie udało się zapisać screenshotów. Spróbuj z mniejszymi obrazkami.');
     }
   });
+}
+
+
+function bindConfirmationFilter() {
+  const ids = ['cfConfirmation','cfKeyLevel','cfLiquidity','cfNewsSoon','cfNoDisplacement','cfHtfFvgAgainst'];
+  ids.forEach(id => $(id)?.addEventListener('change', renderConfirmationFilter));
+  renderConfirmationFilter();
+}
+
+function getConfirmationFilterState() {
+  const state = {
+    confirmation: Boolean($('cfConfirmation')?.checked),
+    keyLevel: Boolean($('cfKeyLevel')?.checked),
+    liquidity: Boolean($('cfLiquidity')?.checked),
+    newsSoon: Boolean($('cfNewsSoon')?.checked),
+    noDisplacement: Boolean($('cfNoDisplacement')?.checked),
+    htfFvgAgainst: Boolean($('cfHtfFvgAgainst')?.checked)
+  };
+  const result = calculateConfirmationFilter(state);
+  return { ...state, score: result.score, verdict: result.verdict };
+}
+
+function normalizeConfirmationFilter(value) {
+  if (!value || typeof value !== 'object') return null;
+  const state = {
+    confirmation: Boolean(value.confirmation),
+    keyLevel: Boolean(value.keyLevel),
+    liquidity: Boolean(value.liquidity),
+    newsSoon: Boolean(value.newsSoon),
+    noDisplacement: Boolean(value.noDisplacement),
+    htfFvgAgainst: Boolean(value.htfFvgAgainst)
+  };
+  const hasSelection = Object.values(state).some(Boolean);
+  if (!hasSelection) return null;
+  const calculated = calculateConfirmationFilter(state);
+  return { ...state, score: calculated.score, verdict: calculated.verdict };
+}
+
+function calculateConfirmationFilter(state) {
+  const selected = ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => Boolean(state[key]));
+  if (!selected) return { score: 0, verdict: 'WAIT', reason: 'Zaznacz to, co faktycznie widzisz. BIAS ≠ ENTRY.', selected: false };
+  const score =
+    (state.confirmation ? 2 : 0) +
+    (state.keyLevel ? 1 : 0) +
+    (state.liquidity ? 1 : 0) -
+    (state.newsSoon ? 2 : 0) -
+    (state.noDisplacement ? 2 : 0) -
+    (state.htfFvgAgainst ? 1 : 0);
+
+  let verdict = 'WAIT';
+  let reason = 'Setup jest mieszany — nie wymuszaj wejścia.';
+  if (score >= 3) {
+    verdict = 'TAKE IT';
+    reason = 'Przewaga potwierdzeń. Nadal respektuj plan, risk i invalidation.';
+  } else if (score <= 0) {
+    verdict = 'NO TRADE';
+    reason = 'Przeciwwskazania ważą tyle samo lub więcej niż potwierdzenia.';
+  }
+  return { score, verdict, reason, selected: true };
+}
+
+function renderConfirmationFilter() {
+  const verdictEl = $('confirmationVerdict');
+  const scoreEl = $('confirmationScore');
+  const reasonEl = $('confirmationReason');
+  if (!verdictEl || !scoreEl || !reasonEl) return;
+  const state = getConfirmationFilterState();
+  const result = calculateConfirmationFilter(state);
+  verdictEl.textContent = result.verdict;
+  verdictEl.className = `confirmation-verdict ${result.selected ? confirmationVerdictClass(result.verdict) : 'neutral'}`;
+  scoreEl.textContent = result.score > 0 ? `+${result.score}` : String(result.score);
+  reasonEl.textContent = result.reason;
+}
+
+function confirmationVerdictClass(verdict) {
+  if (verdict === 'TAKE IT') return 'take';
+  if (verdict === 'NO TRADE') return 'no-trade';
+  return 'wait';
+}
+
+function confirmationFilterHasData(filter) {
+  return Boolean(filter && ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => filter[key]));
+}
+
+function confirmationFilterDetailsHtml(filter) {
+  if (!confirmationFilterHasData(filter)) return '';
+  const positives = [];
+  const negatives = [];
+  if (filter.confirmation) positives.push('Confirmation');
+  if (filter.keyLevel) positives.push('Key Level');
+  if (filter.liquidity) positives.push('Liquidity');
+  if (filter.newsSoon) negatives.push('News soon');
+  if (filter.noDisplacement) negatives.push('No displacement');
+  if (filter.htfFvgAgainst) negatives.push('HTF FVG przeciwko');
+  return `<details class="confirmation-summary"><summary>Confirmation Filter • score ${filter.score > 0 ? '+' : ''}${filter.score}</summary><div class="confirmation-details">${positives.length ? `<div><b>Za:</b> ${positives.map(escapeHtml).join(' • ')}</div>` : '<div><b>Za:</b> —</div>'}${negatives.length ? `<div><b>Przeciw:</b> ${negatives.map(escapeHtml).join(' • ')}</div>` : '<div><b>Przeciw:</b> —</div>'}<small>Filtr opisuje Twoją checklistę przed wejściem; nie jest sygnałem rynkowym.</small></div></details>`;
 }
 
 function setRating(value) {
@@ -627,7 +726,7 @@ async function buildBackupPayload() {
   return {
     type: 'SMC_TRADING_JOURNAL_BACKUP',
     schemaVersion: 2,
-    appVersion: '5.3',
+    appVersion: '5.4',
     exportedAt: new Date().toISOString(),
     trades,
     reviews,
@@ -817,6 +916,7 @@ function renderDashboard() {
   $('recentTrades').classList.toggle('empty-state', latest.length === 0);
   renderWeeklyDashboard();
   renderEdgeAnalytics();
+  renderConfirmationFilterStats();
   renderPlaybookStats();
   drawEquityChart();
   hydrateVisibleScreenshots();
@@ -964,6 +1064,7 @@ function tradeCardHtml(trade, deletable) {
             <span>${escapeHtml(trade.instrument || 'NQ')}</span>
             ${trade.direction ? `<span class="direction-badge ${trade.direction}">${escapeHtml(trade.direction)}</span>` : ''}
             ${(trade.playbookName || resolvePlaybookName(trade.playbookId)) ? `<span class="playbook-badge">${escapeHtml(trade.playbookName || resolvePlaybookName(trade.playbookId))}</span>` : ''}
+            ${confirmationFilterHasData(trade.confirmationFilter) ? `<span class="confirmation-badge ${confirmationVerdictClass(trade.confirmationFilter.verdict)}">${escapeHtml(trade.confirmationFilter.verdict)}</span>` : ''}
             <span class="rr-badge ${tradeToR(trade) > 0 ? 'positive' : tradeToR(trade) < 0 ? 'negative' : 'flat'}">${formatR(tradeToR(trade))}</span>
             <span>Setup ${Number(trade.rating || 0)}/5</span>
             ${trade.mistake ? '<span class="mistake-badge">BŁĄD</span>' : '<span class="mistake-badge clean">PLAN</span>'}
@@ -972,6 +1073,7 @@ function tradeCardHtml(trade, deletable) {
           ${trade.model ? `<div class="trade-model">${escapeHtml(trade.model)}</div>` : ''}
           <div class="process-row"><span class="mini-chip">${trade.planFollowed !== false ? 'Plan ✓' : 'Plan ✕'}</span><span class="mini-chip">Emocja: ${escapeHtml(trade.emotion || 'Neutral')}</span>${trade.mistakeType ? `<span class="mini-chip mistake-chip">${escapeHtml(trade.mistakeType)}</span>` : ''}</div>
           ${(trade.preBias || trade.preThesis || trade.preInvalidation || trade.preTarget || trade.preMaxRisk != null) ? `<details class="pretrade-summary"><summary>Pre-Trade Plan</summary><div class="pretrade-details">${trade.preBias ? `<span><b>Bias:</b> ${escapeHtml(trade.preBias)}</span>` : ''}${trade.preMaxRisk != null ? `<span><b>Max risk:</b> ${escapeHtml(trade.preMaxRisk)}R</span>` : ''}${trade.preInvalidation ? `<span><b>Invalidation:</b> ${escapeHtml(trade.preInvalidation)}</span>` : ''}${trade.preTarget ? `<span><b>Target:</b> ${escapeHtml(trade.preTarget)}</span>` : ''}${trade.preThesis ? `<p>${escapeHtml(trade.preThesis)}</p>` : ''}</div></details>` : ''}
+          ${confirmationFilterDetailsHtml(trade.confirmationFilter)}
         </div>
         ${deletable ? `<button class="danger-btn" type="button" data-delete-trade="${trade.id}">Usuń</button>` : ''}
       </div>
@@ -982,6 +1084,12 @@ function tradeCardHtml(trade, deletable) {
       </div>
     </article>
   `;
+}
+
+
+function renderConfirmationFilterStats() {
+  const sample = trades.filter(t => confirmationFilterHasData(t.confirmationFilter));
+  renderGroupedStats('confirmationFilterStats', sample, t => t.confirmationFilter?.verdict || '', 3);
 }
 
 function renderEdgeAnalytics() {

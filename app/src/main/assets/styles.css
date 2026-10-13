@@ -264,3 +264,45 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .bottom-nav .nav-btn { font-size:9px; }
   .nav-icon { font-size:20px; }
 }
+
+
+/* v5.4 — Confirmation Filter */
+.confirmation-performance-panel { border-color: rgba(245,200,76,.20); }
+.confirmation-filter-block { margin-top:14px; padding:14px; border:1px solid rgba(245,200,76,.22); border-radius:16px; background:linear-gradient(180deg,rgba(245,200,76,.045),rgba(17,22,30,.92)); }
+.confirmation-filter-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.confirmation-filter-head p { margin:6px 0 0; color:var(--muted); font-size:11px; line-height:1.45; }
+.confirmation-verdict { flex:0 0 auto; min-width:82px; text-align:center; border-radius:999px; padding:8px 10px; font-size:10px; font-weight:1000; letter-spacing:.045em; border:1px solid var(--border); }
+.confirmation-verdict.neutral { color:#aab4c5; background:#151b25; }
+.confirmation-verdict.take, .confirmation-badge.take { color:var(--tp); background:rgba(40,209,124,.10); border-color:rgba(40,209,124,.28); }
+.confirmation-verdict.wait, .confirmation-badge.wait { color:var(--be); background:rgba(245,200,76,.10); border-color:rgba(245,200,76,.28); }
+.confirmation-verdict.no-trade, .confirmation-badge.no-trade { color:var(--sl); background:rgba(255,93,101,.10); border-color:rgba(255,93,101,.28); }
+.confirmation-scale { display:grid; grid-template-columns:1fr; gap:10px; margin-top:14px; }
+.confirmation-side { border:1px solid var(--border); background:#0b0f16; border-radius:14px; padding:10px; }
+.confirmation-side-title { display:block; margin:2px 3px 9px; font-size:9px; font-weight:1000; letter-spacing:.09em; color:var(--muted); }
+.positive-side .confirmation-side-title { color:#75dca6; }
+.negative-side .confirmation-side-title { color:#ff8990; }
+.confirmation-item { display:grid; grid-template-columns:24px minmax(0,1fr) 30px; gap:9px; align-items:center; min-height:54px; padding:8px 6px; border-top:1px solid rgba(255,255,255,.055); cursor:pointer; }
+.confirmation-item:first-of-type { border-top:0; }
+.confirmation-item input { width:18px; height:18px; accent-color:var(--accent); }
+.confirmation-item span strong { display:block; color:#e1e7f0; font-size:12px; }
+.confirmation-item span small { display:block; margin-top:2px; color:#7f899a; font-size:9px; line-height:1.35; }
+.confirmation-item b { text-align:right; font-size:11px; }
+.confirmation-item.positive b { color:var(--tp); }
+.confirmation-item.negative b { color:var(--sl); }
+.confirmation-footer { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-top:10px; border-top:1px solid rgba(255,255,255,.06); padding-top:10px; }
+.confirmation-footer > div { color:#dbe3ef; font-size:12px; font-weight:800; white-space:nowrap; }
+.confirmation-footer small { color:var(--muted); font-size:10px; line-height:1.4; text-align:right; }
+.confirmation-badge { display:inline-flex; align-items:center; padding:4px 8px; border-radius:999px; font-size:9px; font-weight:1000; border:1px solid var(--border); }
+.confirmation-summary { margin-top:9px; border:1px solid rgba(245,200,76,.18); border-radius:12px; padding:9px 10px; background:rgba(245,200,76,.035); }
+.confirmation-summary summary { cursor:pointer; font-weight:900; color:#f3d77d; font-size:11px; }
+.confirmation-details { display:grid; gap:5px; margin-top:8px; color:#abb5c6; font-size:11px; line-height:1.45; }
+.confirmation-details small { color:#727d8f; }
+@media (min-width:720px) {
+  .confirmation-scale { grid-template-columns:1fr 1fr; }
+}
+@media (max-width:420px) {
+  .confirmation-filter-head { flex-direction:column; }
+  .confirmation-verdict { align-self:flex-start; }
+  .confirmation-footer { flex-direction:column; }
+  .confirmation-footer small { text-align:left; }
+}
