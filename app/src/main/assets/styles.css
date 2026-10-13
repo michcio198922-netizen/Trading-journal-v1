@@ -289,6 +289,16 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .confirmation-item b { text-align:right; font-size:11px; }
 .confirmation-item.positive b { color:var(--tp); }
 .confirmation-item.negative b { color:var(--sl); }
+.confirmation-custom-list { margin-top:4px; border-top:1px dashed rgba(255,255,255,.08); }
+.confirmation-custom-row { display:grid; grid-template-columns:minmax(0,1fr) 34px; align-items:stretch; border-top:1px solid rgba(255,255,255,.04); }
+.confirmation-custom-row:first-child { border-top:0; }
+.confirmation-custom-row .confirmation-item { border-top:0; min-width:0; }
+.confirmation-item.custom span strong { color:#f4f7fb; }
+.confirmation-custom-empty { padding:9px 6px 3px; color:#657084; font-size:9px; }
+.confirmation-delete { align-self:center; width:30px; height:30px; padding:0; border-radius:9px; border:1px solid rgba(255,93,101,.18); background:rgba(255,93,101,.055); color:#ff8990; font-size:18px; line-height:1; }
+.confirmation-add { display:grid; grid-template-columns:minmax(0,1fr) 64px auto; gap:7px; margin-top:9px; padding-top:9px; border-top:1px dashed rgba(255,255,255,.08); }
+.confirmation-add input, .confirmation-add select { min-width:0; width:100%; border:1px solid var(--border); background:#0d121a; color:#dce4ef; border-radius:10px; padding:9px 10px; font-size:10px; }
+.confirmation-add button.small { min-height:36px; padding:8px 10px; white-space:nowrap; font-size:9px; }
 .confirmation-footer { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-top:10px; border-top:1px solid rgba(255,255,255,.06); padding-top:10px; }
 .confirmation-footer > div { color:#dbe3ef; font-size:12px; font-weight:800; white-space:nowrap; }
 .confirmation-footer small { color:var(--muted); font-size:10px; line-height:1.4; text-align:right; }
@@ -306,3 +316,5 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .confirmation-footer { flex-direction:column; }
   .confirmation-footer small { text-align:left; }
 }
+
+@media (max-width: 460px) { .confirmation-add { grid-template-columns:minmax(0,1fr) 58px; } .confirmation-add button { grid-column:1 / -1; } }

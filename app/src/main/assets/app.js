@@ -1,7 +1,8 @@
 const STORAGE = {
   trades: 'smcJournal.trades.v1',
   reviews: 'smcJournal.reviews.v1',
-  playbooks: 'smcJournal.playbooks.v1'
+  playbooks: 'smcJournal.playbooks.v1',
+  confirmationCriteria: 'smcJournal.confirmationCriteria.v1'
 };
 
 const IMAGE_DB = {
@@ -23,6 +24,7 @@ const CONFLUENCES = [
 let trades = migrateTrades(readJson(STORAGE.trades, []));
 let reviews = readJson(STORAGE.reviews, []);
 let playbooks = migratePlaybooks(readJson(STORAGE.playbooks, []));
+let confirmationCriteria = migrateConfirmationCriteria(readJson(STORAGE.confirmationCriteria, []));
 let pendingPlaybookImageData = null;
 let deferredInstallPrompt = null;
 let imageDbPromise = null;
@@ -113,6 +115,26 @@ function saveTrades() {
 
 function saveReviews() {
   localStorage.setItem(STORAGE.reviews, JSON.stringify(reviews));
+}
+
+function migrateConfirmationCriteria(source) {
+  const seen = new Set();
+  return (Array.isArray(source) ? source : []).map((item) => {
+    const name = String(item?.name || '').trim().slice(0, 60);
+    const side = item?.side === 'negative' ? 'negative' : 'positive';
+    const weight = Number(item?.weight) === 2 ? 2 : 1;
+    const id = String(item?.id || cryptoRandomId());
+    return { id, name, side, weight };
+  }).filter(item => {
+    const key = `${item.side}:${item.name.toLowerCase()}`;
+    if (!item.name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function saveConfirmationCriteria() {
+  localStorage.setItem(STORAGE.confirmationCriteria, JSON.stringify(confirmationCriteria));
 }
 
 function renderConfluences() {
@@ -237,17 +259,108 @@ function bindTradeForm() {
 function bindConfirmationFilter() {
   const ids = ['cfConfirmation','cfKeyLevel','cfLiquidity','cfNewsSoon','cfNoDisplacement','cfHtfFvgAgainst'];
   ids.forEach(id => $(id)?.addEventListener('change', renderConfirmationFilter));
+
+  $('cfAddPositiveBtn')?.addEventListener('click', () => addCustomConfirmationCriterion('positive'));
+  $('cfAddNegativeBtn')?.addEventListener('click', () => addCustomConfirmationCriterion('negative'));
+
+  ['cfAddPositiveName','cfAddNegativeName'].forEach(id => {
+    $(id)?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      addCustomConfirmationCriterion(id.includes('Positive') ? 'positive' : 'negative');
+    });
+  });
+
+  ['cfCustomPositiveList','cfCustomNegativeList'].forEach(id => {
+    $(id)?.addEventListener('change', (event) => {
+      if (event.target.matches('[data-custom-cf-check]')) renderConfirmationFilter();
+    });
+    $(id)?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-cf-delete]');
+      if (!button) return;
+      const criterion = confirmationCriteria.find(item => item.id === button.dataset.cfDelete);
+      if (!criterion) return;
+      confirmationCriteria = confirmationCriteria.filter(item => item.id !== criterion.id);
+      saveConfirmationCriteria();
+      renderCustomConfirmationCriteria();
+      renderConfirmationFilter();
+      toast(`Usunięto filtr: ${criterion.name}`);
+    });
+  });
+
+  renderCustomConfirmationCriteria();
   renderConfirmationFilter();
 }
 
+function addCustomConfirmationCriterion(side) {
+  const isPositive = side === 'positive';
+  const nameInput = $(isPositive ? 'cfAddPositiveName' : 'cfAddNegativeName');
+  const weightInput = $(isPositive ? 'cfAddPositiveWeight' : 'cfAddNegativeWeight');
+  const name = String(nameInput?.value || '').trim();
+  const weight = Number(weightInput?.value) === 2 ? 2 : 1;
+  if (!name) {
+    toast('Wpisz nazwę filtra.');
+    nameInput?.focus();
+    return;
+  }
+  const duplicate = confirmationCriteria.some(item => item.side === side && item.name.toLowerCase() === name.toLowerCase());
+  if (duplicate) {
+    toast('Taki filtr już istnieje po tej stronie.');
+    return;
+  }
+  if (confirmationCriteria.filter(item => item.side === side).length >= 20) {
+    toast('Maksymalnie 20 własnych filtrów na stronę.');
+    return;
+  }
+  confirmationCriteria.push({ id: cryptoRandomId(), name: name.slice(0, 60), side, weight });
+  saveConfirmationCriteria();
+  if (nameInput) nameInput.value = '';
+  if (weightInput) weightInput.value = '1';
+  renderCustomConfirmationCriteria();
+  renderConfirmationFilter();
+  toast(`Dodano filtr ${isPositive ? 'ZA' : 'PRZECIW'}: ${name}`);
+}
+
+function renderCustomConfirmationCriteria() {
+  const renderSide = (side, targetId) => {
+    const target = $(targetId);
+    if (!target) return;
+    const items = confirmationCriteria.filter(item => item.side === side);
+    target.innerHTML = items.length ? items.map(item => {
+      const positive = side === 'positive';
+      const sign = positive ? '+' : '−';
+      return `
+        <div class="confirmation-custom-row">
+          <label class="confirmation-item ${positive ? 'positive' : 'negative'} custom" for="cfCustom-${escapeHtml(item.id)}">
+            <input id="cfCustom-${escapeHtml(item.id)}" data-custom-cf-check type="checkbox" />
+            <span><strong>${escapeHtml(item.name)}</strong><small>Twój własny filtr</small></span>
+            <b>${sign}${item.weight}</b>
+          </label>
+          <button type="button" class="confirmation-delete" data-cf-delete="${escapeHtml(item.id)}" aria-label="Usuń filtr ${escapeHtml(item.name)}">×</button>
+        </div>`;
+    }).join('') : '<div class="confirmation-custom-empty">Brak własnych filtrów.</div>';
+  };
+  renderSide('positive', 'cfCustomPositiveList');
+  renderSide('negative', 'cfCustomNegativeList');
+}
+
 function getConfirmationFilterState() {
+  const customCriteria = confirmationCriteria.map(item => ({
+    id: item.id,
+    name: item.name,
+    side: item.side,
+    weight: item.weight,
+    checked: Boolean($(`cfCustom-${item.id}`)?.checked)
+  })).filter(item => item.checked);
+
   const state = {
     confirmation: Boolean($('cfConfirmation')?.checked),
     keyLevel: Boolean($('cfKeyLevel')?.checked),
     liquidity: Boolean($('cfLiquidity')?.checked),
     newsSoon: Boolean($('cfNewsSoon')?.checked),
     noDisplacement: Boolean($('cfNoDisplacement')?.checked),
-    htfFvgAgainst: Boolean($('cfHtfFvgAgainst')?.checked)
+    htfFvgAgainst: Boolean($('cfHtfFvgAgainst')?.checked),
+    customCriteria
   };
   const result = calculateConfirmationFilter(state);
   return { ...state, score: result.score, verdict: result.verdict };
@@ -255,30 +368,46 @@ function getConfirmationFilterState() {
 
 function normalizeConfirmationFilter(value) {
   if (!value || typeof value !== 'object') return null;
+  const customCriteria = (Array.isArray(value.customCriteria) ? value.customCriteria : []).map(item => ({
+    id: String(item?.id || cryptoRandomId()),
+    name: String(item?.name || '').trim().slice(0, 60),
+    side: item?.side === 'negative' ? 'negative' : 'positive',
+    weight: Number(item?.weight) === 2 ? 2 : 1,
+    checked: true
+  })).filter(item => item.name);
   const state = {
     confirmation: Boolean(value.confirmation),
     keyLevel: Boolean(value.keyLevel),
     liquidity: Boolean(value.liquidity),
     newsSoon: Boolean(value.newsSoon),
     noDisplacement: Boolean(value.noDisplacement),
-    htfFvgAgainst: Boolean(value.htfFvgAgainst)
+    htfFvgAgainst: Boolean(value.htfFvgAgainst),
+    customCriteria
   };
-  const hasSelection = Object.values(state).some(Boolean);
+  const hasSelection = ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => state[key]) || customCriteria.length > 0;
   if (!hasSelection) return null;
   const calculated = calculateConfirmationFilter(state);
   return { ...state, score: calculated.score, verdict: calculated.verdict };
 }
 
 function calculateConfirmationFilter(state) {
-  const selected = ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => Boolean(state[key]));
+  const custom = Array.isArray(state?.customCriteria) ? state.customCriteria.filter(item => item?.checked !== false) : [];
+  const selected = ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => Boolean(state?.[key])) || custom.length > 0;
   if (!selected) return { score: 0, verdict: 'WAIT', reason: 'Zaznacz to, co faktycznie widzisz. BIAS ≠ ENTRY.', selected: false };
+
+  const customScore = custom.reduce((sum, item) => {
+    const weight = Number(item.weight) === 2 ? 2 : 1;
+    return sum + (item.side === 'negative' ? -weight : weight);
+  }, 0);
+
   const score =
     (state.confirmation ? 2 : 0) +
     (state.keyLevel ? 1 : 0) +
     (state.liquidity ? 1 : 0) -
     (state.newsSoon ? 2 : 0) -
     (state.noDisplacement ? 2 : 0) -
-    (state.htfFvgAgainst ? 1 : 0);
+    (state.htfFvgAgainst ? 1 : 0) +
+    customScore;
 
   let verdict = 'WAIT';
   let reason = 'Setup jest mieszany — nie wymuszaj wejścia.';
@@ -312,7 +441,8 @@ function confirmationVerdictClass(verdict) {
 }
 
 function confirmationFilterHasData(filter) {
-  return Boolean(filter && ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => filter[key]));
+  const custom = Array.isArray(filter?.customCriteria) ? filter.customCriteria : [];
+  return Boolean(filter && (['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => filter[key]) || custom.length));
 }
 
 function confirmationFilterDetailsHtml(filter) {
@@ -325,6 +455,10 @@ function confirmationFilterDetailsHtml(filter) {
   if (filter.newsSoon) negatives.push('News soon');
   if (filter.noDisplacement) negatives.push('No displacement');
   if (filter.htfFvgAgainst) negatives.push('HTF FVG przeciwko');
+  (Array.isArray(filter.customCriteria) ? filter.customCriteria : []).forEach(item => {
+    const name = `${item.name} (${item.side === 'negative' ? '−' : '+'}${Number(item.weight) === 2 ? 2 : 1})`;
+    (item.side === 'negative' ? negatives : positives).push(name);
+  });
   return `<details class="confirmation-summary"><summary>Confirmation Filter • score ${filter.score > 0 ? '+' : ''}${filter.score}</summary><div class="confirmation-details">${positives.length ? `<div><b>Za:</b> ${positives.map(escapeHtml).join(' • ')}</div>` : '<div><b>Za:</b> —</div>'}${negatives.length ? `<div><b>Przeciw:</b> ${negatives.map(escapeHtml).join(' • ')}</div>` : '<div><b>Przeciw:</b> —</div>'}<small>Filtr opisuje Twoją checklistę przed wejściem; nie jest sygnałem rynkowym.</small></div></details>`;
 }
 
@@ -725,12 +859,13 @@ async function buildBackupPayload() {
 
   return {
     type: 'SMC_TRADING_JOURNAL_BACKUP',
-    schemaVersion: 2,
-    appVersion: '5.4',
+    schemaVersion: 3,
+    appVersion: '5.5',
     exportedAt: new Date().toISOString(),
     trades,
     reviews,
     playbooks,
+    confirmationCriteria,
     screenshots,
     playbookImages: await collectPlaybookImages()
   };
@@ -743,9 +878,10 @@ async function restoreBackup(rawJson) {
   }
 
   const importedPlaybooks = migratePlaybooks(Array.isArray(parsed.playbooks) ? parsed.playbooks : []);
+  const importedConfirmationCriteria = migrateConfirmationCriteria(Array.isArray(parsed.confirmationCriteria) ? parsed.confirmationCriteria : []);
   const playbookImages = parsed.playbookImages && typeof parsed.playbookImages === 'object' ? parsed.playbookImages : {};
 
-  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów, ${parsed.reviews.length} review i ${importedPlaybooks.length} playbooków?`)) {
+  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów, ${parsed.reviews.length} review, ${importedPlaybooks.length} playbooków i ${importedConfirmationCriteria.length} własnych filtrów?`)) {
     toast('Import anulowany.');
     return;
   }
@@ -773,9 +909,13 @@ async function restoreBackup(rawJson) {
   trades = importedTrades.sort(sortTradesAsc);
   reviews = importedReviews;
   playbooks = importedPlaybooks;
+  confirmationCriteria = importedConfirmationCriteria;
   saveTrades();
   saveReviews();
   savePlaybooks();
+  saveConfirmationCriteria();
+  renderCustomConfirmationCriteria();
+  renderConfirmationFilter();
   renderPlaybookSelect();
   renderAll();
   toast('Backup przywrócony.');

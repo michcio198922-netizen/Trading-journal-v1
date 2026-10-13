@@ -290,7 +290,7 @@
             <div class="confirmation-filter-head">
               <div>
                 <span class="group-label">Confirmation Filter</span>
-                <p>Szukaj potwierdzenia setupu, nie argumentów pod swój bias.</p>
+                <p>Szukaj potwierdzenia setupu, nie argumentów pod swój bias. Możesz też dodać własne filtry ZA i PRZECIW.</p>
               </div>
               <div id="confirmationVerdict" class="confirmation-verdict neutral">WAIT</div>
             </div>
@@ -313,6 +313,15 @@
                   <span><strong>Liquidity</strong><small>Liquidity została zabrana / jest logiczny draw</small></span>
                   <b>+1</b>
                 </label>
+                <div id="cfCustomPositiveList" class="confirmation-custom-list"></div>
+                <div class="confirmation-add">
+                  <input id="cfAddPositiveName" type="text" maxlength="60" placeholder="Dodaj własne ZA, np. SMT" />
+                  <select id="cfAddPositiveWeight" aria-label="Waga własnego filtra ZA">
+                    <option value="1">+1</option>
+                    <option value="2">+2</option>
+                  </select>
+                  <button id="cfAddPositiveBtn" type="button" class="secondary small">+ Dodaj</button>
+                </div>
               </div>
 
               <div class="confirmation-side negative-side">
@@ -332,6 +341,15 @@
                   <span><strong>HTF FVG przeciwko</strong><small>Wyższy TF daje przeszkodę / przeciwne POI</small></span>
                   <b>−1</b>
                 </label>
+                <div id="cfCustomNegativeList" class="confirmation-custom-list"></div>
+                <div class="confirmation-add">
+                  <input id="cfAddNegativeName" type="text" maxlength="60" placeholder="Dodaj własne PRZECIW, np. słabe RR" />
+                  <select id="cfAddNegativeWeight" aria-label="Waga własnego filtra PRZECIW">
+                    <option value="1">−1</option>
+                    <option value="2">−2</option>
+                  </select>
+                  <button id="cfAddNegativeBtn" type="button" class="secondary small">+ Dodaj</button>
+                </div>
               </div>
             </div>
 
