@@ -134,6 +134,16 @@
           <div id="confluenceStats" class="edge-table empty-state">Brak danych do analizy.</div>
         </article>
 
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <h3>Tagi trade'ów</h3>
+              <p>Porównaj wyniki według własnych tagów, np. statystyczny SL, TP albo SL z błędem.</p>
+            </div>
+          </div>
+          <div id="tradeTagStats" class="edge-table empty-state">Brak danych z tagów.</div>
+        </article>
+
         <article class="panel confirmation-performance-panel">
           <div class="panel-head">
             <div>
@@ -371,6 +381,16 @@
             </div>
           </div>
 
+          <div class="field-group trade-tags-block">
+            <span class="group-label">Tagi trade'a</span>
+            <small class="field-hint">Możesz zaznaczyć kilka. Przy TP / SL aplikacja podpowie podstawowy tag, ale możesz go zmienić.</small>
+            <div id="tradeTagGrid" class="trade-tag-grid"></div>
+            <div class="trade-tag-add">
+              <input id="tradeTagNew" type="text" maxlength="50" placeholder="Dodaj własny tag, np. Early exit" />
+              <button id="tradeTagAddBtn" type="button" class="secondary small">+ Dodaj tag</button>
+            </div>
+          </div>
+
           <label class="field">
             <span>Wynik w R (RR)</span>
             <input id="tradeR" type="number" step="0.1" inputmode="decimal" placeholder="np. 2.5, -1, 0" required />
@@ -568,6 +588,7 @@
             <select id="historySession" class="compact-select"><option value="ALL">Sesja: wszystkie</option><option>New York</option><option>London</option><option>Asia</option><option>Inna</option></select>
             <select id="historyDirection" class="compact-select"><option value="ALL">Kierunek: oba</option><option>LONG</option><option>SHORT</option></select>
             <select id="historyPlaybook" class="compact-select"><option value="ALL">Playbook: wszystkie</option><option value="NONE">Bez playbooka</option></select>
+            <select id="historyTag" class="compact-select"><option value="ALL">Tag: wszystkie</option></select>
           </div>
         </div>
         <div id="historyList" class="trade-list empty-state">Brak zapisanych trade'ów.</div>

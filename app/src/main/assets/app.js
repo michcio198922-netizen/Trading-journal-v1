@@ -2,8 +2,15 @@ const STORAGE = {
   trades: 'smcJournal.trades.v1',
   reviews: 'smcJournal.reviews.v1',
   playbooks: 'smcJournal.playbooks.v1',
-  confirmationCriteria: 'smcJournal.confirmationCriteria.v1'
+  confirmationCriteria: 'smcJournal.confirmationCriteria.v1',
+  tradeTags: 'smcJournal.tradeTags.v1'
 };
+
+const DEFAULT_TRADE_TAGS = [
+  'Statystyczny stop loss',
+  'Take profit',
+  'Stop loss z błędem'
+];
 
 const IMAGE_DB = {
   name: 'smcJournal.images.db',
@@ -25,6 +32,7 @@ let trades = migrateTrades(readJson(STORAGE.trades, []));
 let reviews = readJson(STORAGE.reviews, []);
 let playbooks = migratePlaybooks(readJson(STORAGE.playbooks, []));
 let confirmationCriteria = migrateConfirmationCriteria(readJson(STORAGE.confirmationCriteria, []));
+let tradeTags = migrateTradeTags(readJson(STORAGE.tradeTags, DEFAULT_TRADE_TAGS));
 let pendingPlaybookImageData = null;
 let deferredInstallPrompt = null;
 let imageDbPromise = null;
@@ -37,10 +45,12 @@ init();
 
 function init() {
   renderConfluences();
+  renderTradeTagGrid([]);
   setDefaultDate();
   setRating(3);
   bindNavigation();
   bindTradeForm();
+  bindTradeTags();
   bindConfirmationFilter();
   bindHistory();
   bindReviewForm();
@@ -71,6 +81,7 @@ function migrateTrades(source) {
     playbookName: trade.playbookName || '',
     rr: Number.isFinite(Number(trade.rr)) ? Number(trade.rr) : (trade.result === 'TP' ? 1 : trade.result === 'SL' ? -1 : 0),
     confluences: Array.isArray(trade.confluences) ? trade.confluences : [],
+    tags: Array.isArray(trade.tags) ? [...new Set(trade.tags.map(tag => String(tag || '').trim()).filter(Boolean))] : [],
     rating: Number(trade.rating || 3),
     note: trade.note || '',
     mistake: Boolean(trade.mistake),
@@ -137,6 +148,116 @@ function saveConfirmationCriteria() {
   localStorage.setItem(STORAGE.confirmationCriteria, JSON.stringify(confirmationCriteria));
 }
 
+function migrateTradeTags(source) {
+  const seen = new Set();
+  return (Array.isArray(source) ? source : []).map(item => String(item?.name ?? item ?? '').trim().slice(0, 50))
+    .filter(name => {
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function saveTradeTags() {
+  localStorage.setItem(STORAGE.tradeTags, JSON.stringify(tradeTags));
+}
+
+function getSelectedTradeTags() {
+  return [...document.querySelectorAll('#tradeTagGrid input[type="checkbox"]:checked')].map(input => input.value);
+}
+
+function renderTradeTagGrid(selectedNames = null) {
+  const wrap = $('tradeTagGrid');
+  if (!wrap) return;
+  const selected = new Set(Array.isArray(selectedNames) ? selectedNames : getSelectedTradeTags());
+  wrap.innerHTML = tradeTags.length ? tradeTags.map((name, index) => `
+    <div class="trade-tag-option">
+      <input type="checkbox" id="trade-tag-${index}" value="${escapeHtml(name)}" ${selected.has(name) ? 'checked' : ''} />
+      <label for="trade-tag-${index}">${escapeHtml(name)}</label>
+      <button type="button" class="trade-tag-remove" data-remove-trade-tag="${escapeHtml(name)}" aria-label="Usuń tag ${escapeHtml(name)}">×</button>
+    </div>
+  `).join('') : '<div class="empty-inline">Brak tagów. Dodaj pierwszy poniżej.</div>';
+}
+
+function addTradeTag() {
+  const input = $('tradeTagNew');
+  const name = String(input?.value || '').trim().slice(0, 50);
+  if (!name) {
+    toast('Wpisz nazwę tagu.');
+    return;
+  }
+  if (tradeTags.some(tag => tag.toLowerCase() === name.toLowerCase())) {
+    toast('Taki tag już istnieje.');
+    return;
+  }
+  if (tradeTags.length >= 40) {
+    toast('Maksymalnie 40 tagów.');
+    return;
+  }
+  const selected = getSelectedTradeTags();
+  tradeTags.push(name);
+  saveTradeTags();
+  input.value = '';
+  renderTradeTagGrid([...selected, name]);
+  renderTradeTagFilter();
+  toast('Tag dodany.');
+}
+
+function bindTradeTags() {
+  $('tradeTagAddBtn')?.addEventListener('click', addTradeTag);
+  $('tradeTagNew')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addTradeTag();
+    }
+  });
+
+  $('tradeTagGrid')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-trade-tag]');
+    if (!button) return;
+    const name = button.dataset.removeTradeTag;
+    const selected = getSelectedTradeTags().filter(tag => tag !== name);
+    if (!confirm(`Usunąć tag "${name}" z listy? Stare trade'y zachowają ten tag.`)) return;
+    tradeTags = tradeTags.filter(tag => tag !== name);
+    saveTradeTags();
+    renderTradeTagGrid(selected);
+    renderTradeTagFilter();
+  });
+
+  document.querySelectorAll('input[name="result"]').forEach(input => {
+    input.addEventListener('change', applySuggestedResultTag);
+  });
+  $('tradeMistake')?.addEventListener('change', applySuggestedResultTag);
+}
+
+function setTradeTagChecked(name, checked) {
+  [...document.querySelectorAll('#tradeTagGrid input[type="checkbox"]')].forEach(input => {
+    if (input.value === name) input.checked = checked;
+  });
+}
+
+function applySuggestedResultTag() {
+  const result = document.querySelector('input[name="result"]:checked')?.value || '';
+  const mistake = Boolean($('tradeMistake')?.checked);
+
+  DEFAULT_TRADE_TAGS.forEach(name => setTradeTagChecked(name, false));
+  if (result === 'TP') setTradeTagChecked('Take profit', true);
+  if (result === 'SL' && mistake) setTradeTagChecked('Stop loss z błędem', true);
+  if (result === 'SL' && !mistake) setTradeTagChecked('Statystyczny stop loss', true);
+}
+
+function renderTradeTagFilter() {
+  const select = $('historyTag');
+  if (!select) return;
+  const current = select.value || 'ALL';
+  const names = new Set(tradeTags);
+  trades.forEach(trade => (Array.isArray(trade.tags) ? trade.tags : []).forEach(tag => names.add(tag)));
+  const sorted = [...names].filter(Boolean).sort((a,b) => a.localeCompare(b, 'pl'));
+  select.innerHTML = `<option value="ALL">Tag: wszystkie</option>${sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+  select.value = sorted.includes(current) || current === 'ALL' ? current : 'ALL';
+}
+
 function renderConfluences() {
   const wrap = $('confluenceGrid');
   wrap.innerHTML = CONFLUENCES.map((name, i) => `
@@ -193,6 +314,7 @@ function bindTradeForm() {
     }
 
     const selectedConfluences = [...document.querySelectorAll('#confluenceGrid input:checked')].map(el => el.value);
+    const selectedTags = getSelectedTradeTags();
     const rr = Number(String($('tradeR').value).replace(',', '.'));
     if (!Number.isFinite(rr)) {
       toast('Wpisz poprawny wynik w R.');
@@ -213,6 +335,7 @@ function bindTradeForm() {
       result,
       rr,
       confluences: selectedConfluences,
+      tags: selectedTags,
       rating: Number($('tradeRating').value || 3),
       note: $('tradeNote').value.trim(),
       mistake: $('tradeMistake').checked,
@@ -239,6 +362,7 @@ function bindTradeForm() {
       trades.sort(sortTradesAsc);
       saveTrades();
       $('tradeForm').reset();
+      renderTradeTagGrid([]);
       renderConfirmationFilter();
       $('tradePlaybook').value = '';
       renderSelectedPlaybookPreview();
@@ -470,7 +594,7 @@ function setRating(value) {
 }
 
 function bindHistory() {
-  ['historyFilter','historyInstrument','historySession','historyDirection','historyPlaybook'].forEach(id => $(id).addEventListener('change', renderHistory));
+  ['historyFilter','historyInstrument','historySession','historyDirection','historyPlaybook','historyTag'].forEach(id => $(id).addEventListener('change', renderHistory));
   $('historyList').addEventListener('click', async (event) => {
     const button = event.target.closest('[data-delete-trade]');
     if (button) {
@@ -859,13 +983,14 @@ async function buildBackupPayload() {
 
   return {
     type: 'SMC_TRADING_JOURNAL_BACKUP',
-    schemaVersion: 3,
-    appVersion: '5.5',
+    schemaVersion: 4,
+    appVersion: '5.6',
     exportedAt: new Date().toISOString(),
     trades,
     reviews,
     playbooks,
     confirmationCriteria,
+    tradeTags,
     screenshots,
     playbookImages: await collectPlaybookImages()
   };
@@ -879,9 +1004,10 @@ async function restoreBackup(rawJson) {
 
   const importedPlaybooks = migratePlaybooks(Array.isArray(parsed.playbooks) ? parsed.playbooks : []);
   const importedConfirmationCriteria = migrateConfirmationCriteria(Array.isArray(parsed.confirmationCriteria) ? parsed.confirmationCriteria : []);
+  const importedTradeTags = migrateTradeTags(Array.isArray(parsed.tradeTags) ? parsed.tradeTags : DEFAULT_TRADE_TAGS);
   const playbookImages = parsed.playbookImages && typeof parsed.playbookImages === 'object' ? parsed.playbookImages : {};
 
-  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów, ${parsed.reviews.length} review, ${importedPlaybooks.length} playbooków i ${importedConfirmationCriteria.length} własnych filtrów?`)) {
+  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów, ${parsed.reviews.length} review, ${importedPlaybooks.length} playbooków, ${importedConfirmationCriteria.length} własnych filtrów i ${importedTradeTags.length} tagów?`)) {
     toast('Import anulowany.');
     return;
   }
@@ -910,10 +1036,14 @@ async function restoreBackup(rawJson) {
   reviews = importedReviews;
   playbooks = importedPlaybooks;
   confirmationCriteria = importedConfirmationCriteria;
+  tradeTags = importedTradeTags;
   saveTrades();
   saveReviews();
   savePlaybooks();
   saveConfirmationCriteria();
+  saveTradeTags();
+  renderTradeTagGrid([]);
+  renderTradeTagFilter();
   renderCustomConfirmationCriteria();
   renderConfirmationFilter();
   renderPlaybookSelect();
@@ -1015,6 +1145,7 @@ function renderAll() {
   renderReviews();
   renderPlaybooks();
   renderPlaybookSelect();
+  renderTradeTagFilter();
 }
 
 function renderDashboard() {
@@ -1177,13 +1308,15 @@ function renderHistory() {
   const session = $('historySession').value;
   const direction = $('historyDirection').value;
   const playbook = $('historyPlaybook').value;
+  const tag = $('historyTag').value;
   const list = [...trades].filter(t => {
     const resultOk = filter === 'ALL' || (filter === 'MISTAKE' ? t.mistake : t.result === filter);
     const instrumentOk = instrument === 'ALL' || t.instrument === instrument;
     const sessionOk = session === 'ALL' || t.session === session;
     const directionOk = direction === 'ALL' || t.direction === direction;
     const playbookOk = playbook === 'ALL' || (playbook === 'NONE' ? !t.playbookId : t.playbookId === playbook);
-    return resultOk && instrumentOk && sessionOk && directionOk && playbookOk;
+    const tagOk = tag === 'ALL' || (Array.isArray(t.tags) && t.tags.includes(tag));
+    return resultOk && instrumentOk && sessionOk && directionOk && playbookOk && tagOk;
   }).sort(sortTradesDesc);
   $('historyList').innerHTML = list.length ? list.map(t => tradeCardHtml(t, true)).join('') : 'Brak trade\'ów dla wybranego filtra.';
   $('historyList').classList.toggle('empty-state', list.length === 0);
@@ -1194,6 +1327,9 @@ function tradeCardHtml(trade, deletable) {
   const confluences = trade.confluences?.length
     ? trade.confluences.map(c => `<span class="mini-chip">${escapeHtml(c)}</span>`).join('')
     : '<span class="mini-chip">bez zaznaczonych confluencji</span>';
+  const tagChips = Array.isArray(trade.tags) && trade.tags.length
+    ? trade.tags.map(tag => `<span class="mini-chip trade-tag-chip">${escapeHtml(tag)}</span>`).join('')
+    : '';
 
   return `
     <article class="trade-card">
@@ -1212,6 +1348,7 @@ function tradeCardHtml(trade, deletable) {
           <div class="trade-meta">${formatDate(trade.date)} • ${escapeHtml(trade.session || 'bez sesji')} • ${trade.confluences?.length || 0} confluencji • ${trade.screenshotCount || 0} screenów</div>
           ${trade.model ? `<div class="trade-model">${escapeHtml(trade.model)}</div>` : ''}
           <div class="process-row"><span class="mini-chip">${trade.planFollowed !== false ? 'Plan ✓' : 'Plan ✕'}</span><span class="mini-chip">Emocja: ${escapeHtml(trade.emotion || 'Neutral')}</span>${trade.mistakeType ? `<span class="mini-chip mistake-chip">${escapeHtml(trade.mistakeType)}</span>` : ''}</div>
+          ${tagChips ? `<div class="trade-tags-row">${tagChips}</div>` : ''}
           ${(trade.preBias || trade.preThesis || trade.preInvalidation || trade.preTarget || trade.preMaxRisk != null) ? `<details class="pretrade-summary"><summary>Pre-Trade Plan</summary><div class="pretrade-details">${trade.preBias ? `<span><b>Bias:</b> ${escapeHtml(trade.preBias)}</span>` : ''}${trade.preMaxRisk != null ? `<span><b>Max risk:</b> ${escapeHtml(trade.preMaxRisk)}R</span>` : ''}${trade.preInvalidation ? `<span><b>Invalidation:</b> ${escapeHtml(trade.preInvalidation)}</span>` : ''}${trade.preTarget ? `<span><b>Target:</b> ${escapeHtml(trade.preTarget)}</span>` : ''}${trade.preThesis ? `<p>${escapeHtml(trade.preThesis)}</p>` : ''}</div></details>` : ''}
           ${confirmationFilterDetailsHtml(trade.confirmationFilter)}
         </div>
@@ -1234,6 +1371,7 @@ function renderConfirmationFilterStats() {
 
 function renderEdgeAnalytics() {
   renderConfluenceStats();
+  renderTradeTagStats();
   renderGroupedStats('sessionStats', trades.filter(t => t.session), t => t.session, 4);
   renderGroupedStats('directionStats', trades.filter(t => t.direction), t => t.direction, 2);
   renderGroupedStats('mistakeStats', trades, t => t.mistake ? 'Z błędem' : 'Bez błędu', 2);
@@ -1248,6 +1386,22 @@ function renderConfluenceStats() {
     .sort((a, b) => b.avgR - a.avgR || b.winRate - a.winRate || b.count - a.count);
 
   renderEdgeRows('confluenceStats', rows, 8);
+}
+
+function renderTradeTagStats() {
+  const groups = new Map();
+  trades.forEach(trade => {
+    (Array.isArray(trade.tags) ? trade.tags : []).forEach(tag => {
+      const name = String(tag || '').trim();
+      if (!name) return;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(trade);
+    });
+  });
+  const rows = [...groups.entries()]
+    .map(([name, sample]) => buildEdgeRow(name, sample))
+    .sort((a, b) => b.avgR - a.avgR || b.totalR - a.totalR || b.count - a.count);
+  renderEdgeRows('tradeTagStats', rows, 12);
 }
 
 function renderGroupedStats(targetId, sourceTrades, keyFn, limit = 8) {
