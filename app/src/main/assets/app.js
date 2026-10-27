@@ -1,0 +1,1780 @@
+const STORAGE = {
+  trades: 'smcJournal.trades.v1',
+  reviews: 'smcJournal.reviews.v1',
+  playbooks: 'smcJournal.playbooks.v1',
+  confirmationCriteria: 'smcJournal.confirmationCriteria.v1',
+  tradeTags: 'smcJournal.tradeTags.v1'
+};
+
+const DEFAULT_TRADE_TAGS = [
+  'Statystyczny stop loss',
+  'Take profit',
+  'Stop loss z błędem'
+];
+
+const IMAGE_DB = {
+  name: 'smcJournal.images.db',
+  store: 'tradeScreenshots'
+};
+
+const CONFLUENCES = [
+  'HTF 1D/4H',
+  'Liq Sweep',
+  'IFVG 15m',
+  'BOS 5m',
+  'Divergencja',
+  'SMT',
+  '30m IFVG',
+  'Session Sweep'
+];
+
+let trades = migrateTrades(readJson(STORAGE.trades, []));
+let reviews = readJson(STORAGE.reviews, []);
+let playbooks = migratePlaybooks(readJson(STORAGE.playbooks, []));
+let confirmationCriteria = migrateConfirmationCriteria(readJson(STORAGE.confirmationCriteria, []));
+let tradeTags = migrateTradeTags(readJson(STORAGE.tradeTags, DEFAULT_TRADE_TAGS));
+let pendingPlaybookImageData = null;
+let deferredInstallPrompt = null;
+let imageDbPromise = null;
+
+const $ = (id) => document.getElementById(id);
+const views = [...document.querySelectorAll('.view')];
+const navButtons = [...document.querySelectorAll('.nav-btn')];
+
+init();
+
+function init() {
+  renderConfluences();
+  renderTradeTagGrid([]);
+  setDefaultDate();
+  setRating(3);
+  bindNavigation();
+  bindTradeForm();
+  bindTradeTags();
+  bindConfirmationFilter();
+  bindHistory();
+  bindReviewForm();
+  bindPlaybookForm();
+  bindBackup();
+  bindScreenshotPreview();
+  bindLightbox();
+  renderPlaybookSelect();
+  renderAll();
+}
+
+function readJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function migrateTrades(source) {
+  return (Array.isArray(source) ? source : []).map((trade) => ({
+    ...trade,
+    direction: trade.direction || '',
+    session: trade.session || '',
+    model: trade.model || '',
+    playbookId: trade.playbookId || '',
+    playbookName: trade.playbookName || '',
+    rr: Number.isFinite(Number(trade.rr)) ? Number(trade.rr) : (trade.result === 'TP' ? 1 : trade.result === 'SL' ? -1 : 0),
+    confluences: Array.isArray(trade.confluences) ? trade.confluences : [],
+    tags: Array.isArray(trade.tags) ? [...new Set(trade.tags.map(tag => String(tag || '').trim()).filter(Boolean))] : [],
+    rating: Number(trade.rating || 3),
+    note: trade.note || '',
+    mistake: Boolean(trade.mistake),
+    planFollowed: trade.planFollowed !== false,
+    mistakeType: trade.mistakeType || '',
+    emotion: trade.emotion || 'Neutral',
+    preBias: trade.preBias || '',
+    preThesis: trade.preThesis || '',
+    preInvalidation: trade.preInvalidation || '',
+    preTarget: trade.preTarget || '',
+    preMaxRisk: Number.isFinite(Number(trade.preMaxRisk)) ? Number(trade.preMaxRisk) : null,
+    confirmationFilter: normalizeConfirmationFilter(trade.confirmationFilter),
+    screenshotCount: Number(trade.screenshotCount || 0),
+    createdAt: trade.createdAt || new Date().toISOString()
+  }));
+}
+
+function migratePlaybooks(source) {
+  return (Array.isArray(source) ? source : []).map((item) => ({
+    id: item.id || cryptoRandomId(),
+    name: String(item.name || '').trim(),
+    direction: item.direction || 'ANY',
+    session: item.session || 'ANY',
+    minRR: item.minRR === '' || item.minRR == null ? null : Number(item.minRR),
+    conditions: item.conditions || '',
+    invalidation: item.invalidation || '',
+    target: item.target || '',
+    note: item.note || '',
+    hasImage: Boolean(item.hasImage),
+    createdAt: item.createdAt || new Date().toISOString(),
+    updatedAt: item.updatedAt || item.createdAt || new Date().toISOString()
+  })).filter(item => item.name);
+}
+
+function savePlaybooks() {
+  localStorage.setItem(STORAGE.playbooks, JSON.stringify(playbooks));
+}
+
+function saveTrades() {
+  localStorage.setItem(STORAGE.trades, JSON.stringify(trades));
+}
+
+function saveReviews() {
+  localStorage.setItem(STORAGE.reviews, JSON.stringify(reviews));
+}
+
+function migrateConfirmationCriteria(source) {
+  const seen = new Set();
+  return (Array.isArray(source) ? source : []).map((item) => {
+    const name = String(item?.name || '').trim().slice(0, 60);
+    const side = item?.side === 'negative' ? 'negative' : 'positive';
+    const weight = Number(item?.weight) === 2 ? 2 : 1;
+    const id = String(item?.id || cryptoRandomId());
+    return { id, name, side, weight };
+  }).filter(item => {
+    const key = `${item.side}:${item.name.toLowerCase()}`;
+    if (!item.name || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function saveConfirmationCriteria() {
+  localStorage.setItem(STORAGE.confirmationCriteria, JSON.stringify(confirmationCriteria));
+}
+
+function migrateTradeTags(source) {
+  const seen = new Set();
+  return (Array.isArray(source) ? source : []).map(item => String(item?.name ?? item ?? '').trim().slice(0, 50))
+    .filter(name => {
+      const key = name.toLowerCase();
+      if (!name || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function saveTradeTags() {
+  localStorage.setItem(STORAGE.tradeTags, JSON.stringify(tradeTags));
+}
+
+function getSelectedTradeTags() {
+  return [...document.querySelectorAll('#tradeTagGrid input[type="checkbox"]:checked')].map(input => input.value);
+}
+
+function renderTradeTagGrid(selectedNames = null) {
+  const wrap = $('tradeTagGrid');
+  if (!wrap) return;
+  const selected = new Set(Array.isArray(selectedNames) ? selectedNames : getSelectedTradeTags());
+  wrap.innerHTML = tradeTags.length ? tradeTags.map((name, index) => `
+    <div class="trade-tag-option">
+      <input type="checkbox" id="trade-tag-${index}" value="${escapeHtml(name)}" ${selected.has(name) ? 'checked' : ''} />
+      <label for="trade-tag-${index}">${escapeHtml(name)}</label>
+      <button type="button" class="trade-tag-remove" data-remove-trade-tag="${escapeHtml(name)}" aria-label="Usuń tag ${escapeHtml(name)}">×</button>
+    </div>
+  `).join('') : '<div class="empty-inline">Brak tagów. Dodaj pierwszy poniżej.</div>';
+}
+
+function addTradeTag() {
+  const input = $('tradeTagNew');
+  const name = String(input?.value || '').trim().slice(0, 50);
+  if (!name) {
+    toast('Wpisz nazwę tagu.');
+    return;
+  }
+  if (tradeTags.some(tag => tag.toLowerCase() === name.toLowerCase())) {
+    toast('Taki tag już istnieje.');
+    return;
+  }
+  if (tradeTags.length >= 40) {
+    toast('Maksymalnie 40 tagów.');
+    return;
+  }
+  const selected = getSelectedTradeTags();
+  tradeTags.push(name);
+  saveTradeTags();
+  input.value = '';
+  renderTradeTagGrid([...selected, name]);
+  renderTradeTagFilter();
+  toast('Tag dodany.');
+}
+
+function bindTradeTags() {
+  $('tradeTagAddBtn')?.addEventListener('click', addTradeTag);
+  $('tradeTagNew')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      addTradeTag();
+    }
+  });
+
+  $('tradeTagGrid')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-remove-trade-tag]');
+    if (!button) return;
+    const name = button.dataset.removeTradeTag;
+    const selected = getSelectedTradeTags().filter(tag => tag !== name);
+    if (!confirm(`Usunąć tag "${name}" z listy? Stare trade'y zachowają ten tag.`)) return;
+    tradeTags = tradeTags.filter(tag => tag !== name);
+    saveTradeTags();
+    renderTradeTagGrid(selected);
+    renderTradeTagFilter();
+  });
+
+  document.querySelectorAll('input[name="result"]').forEach(input => {
+    input.addEventListener('change', applySuggestedResultTag);
+  });
+  $('tradeMistake')?.addEventListener('change', applySuggestedResultTag);
+}
+
+function setTradeTagChecked(name, checked) {
+  [...document.querySelectorAll('#tradeTagGrid input[type="checkbox"]')].forEach(input => {
+    if (input.value === name) input.checked = checked;
+  });
+}
+
+function applySuggestedResultTag() {
+  const result = document.querySelector('input[name="result"]:checked')?.value || '';
+  const mistake = Boolean($('tradeMistake')?.checked);
+
+  DEFAULT_TRADE_TAGS.forEach(name => setTradeTagChecked(name, false));
+  if (result === 'TP') setTradeTagChecked('Take profit', true);
+  if (result === 'SL' && mistake) setTradeTagChecked('Stop loss z błędem', true);
+  if (result === 'SL' && !mistake) setTradeTagChecked('Statystyczny stop loss', true);
+}
+
+function renderTradeTagFilter() {
+  const select = $('historyTag');
+  if (!select) return;
+  const current = select.value || 'ALL';
+  const names = new Set(tradeTags);
+  trades.forEach(trade => (Array.isArray(trade.tags) ? trade.tags : []).forEach(tag => names.add(tag)));
+  const sorted = [...names].filter(Boolean).sort((a,b) => a.localeCompare(b, 'pl'));
+  select.innerHTML = `<option value="ALL">Tag: wszystkie</option>${sorted.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+  select.value = sorted.includes(current) || current === 'ALL' ? current : 'ALL';
+}
+
+function renderConfluences() {
+  const wrap = $('confluenceGrid');
+  wrap.innerHTML = CONFLUENCES.map((name, i) => `
+    <div class="check-chip">
+      <input type="checkbox" id="conf-${i}" value="${escapeHtml(name)}" />
+      <label for="conf-${i}">${escapeHtml(name)}</label>
+    </div>
+  `).join('');
+}
+
+function setDefaultDate() {
+  $('tradeDate').value = toInputDate(new Date());
+}
+
+function bindNavigation() {
+  navButtons.forEach(btn => btn.addEventListener('click', () => switchView(btn.dataset.view)));
+}
+
+function switchView(name) {
+  views.forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
+  navButtons.forEach(b => b.classList.toggle('active', b.dataset.view === name));
+  if (name === 'dashboard') renderDashboard();
+  if (name === 'history') renderHistory();
+  if (name === 'playbook') renderPlaybooks();
+  if (name === 'review') renderReviews();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function bindTradeForm() {
+  document.querySelectorAll('#ratingPicker button').forEach(btn => {
+    btn.addEventListener('click', () => setRating(Number(btn.dataset.rating)));
+  });
+
+  $('tradeForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const result = document.querySelector('input[name="result"]:checked')?.value;
+    if (!result) {
+      toast('Wybierz wynik trade\'a.');
+      return;
+    }
+
+    const direction = document.querySelector('input[name="direction"]:checked')?.value;
+    if (!direction) {
+      toast('Wybierz LONG albo SHORT.');
+      return;
+    }
+
+    const selectedPlaybookId = $('tradePlaybook').value;
+    const selectedPlaybook = playbooks.find(p => p.id === selectedPlaybookId);
+    const model = $('tradeModel').value.trim();
+    if (!model) {
+      toast('Wpisz setup / model wejścia.');
+      return;
+    }
+
+    const selectedConfluences = [...document.querySelectorAll('#confluenceGrid input:checked')].map(el => el.value);
+    const selectedTags = getSelectedTradeTags();
+    const rr = Number(String($('tradeR').value).replace(',', '.'));
+    if (!Number.isFinite(rr)) {
+      toast('Wpisz poprawny wynik w R.');
+      return;
+    }
+
+    const screenshotFiles = [...($('tradeScreenshots').files || [])];
+
+    const trade = {
+      id: cryptoRandomId(),
+      date: $('tradeDate').value,
+      instrument: $('tradeInstrument').value,
+      direction,
+      session: $('tradeSession').value,
+      model,
+      playbookId: selectedPlaybook?.id || '',
+      playbookName: selectedPlaybook?.name || '',
+      result,
+      rr,
+      confluences: selectedConfluences,
+      tags: selectedTags,
+      rating: Number($('tradeRating').value || 3),
+      note: $('tradeNote').value.trim(),
+      mistake: $('tradeMistake').checked,
+      planFollowed: $('tradePlanFollowed').checked,
+      mistakeType: $('tradeMistakeType').value,
+      emotion: $('tradeEmotion').value,
+      preBias: $('preBias').value,
+      preThesis: $('preThesis').value.trim(),
+      preInvalidation: $('preInvalidation').value.trim(),
+      preTarget: $('preTarget').value.trim(),
+      preMaxRisk: $('preMaxRisk').value === '' ? null : Number(String($('preMaxRisk').value).replace(',', '.')),
+      confirmationFilter: getConfirmationFilterState(),
+      screenshotCount: screenshotFiles.length,
+      createdAt: new Date().toISOString()
+    };
+
+    try {
+      if (screenshotFiles.length) {
+        const shots = await Promise.all(screenshotFiles.map(fileToCompressedDataUrl));
+        await saveTradeScreenshots(trade.id, shots);
+      }
+
+      trades.push(trade);
+      trades.sort(sortTradesAsc);
+      saveTrades();
+      $('tradeForm').reset();
+      renderTradeTagGrid([]);
+      renderConfirmationFilter();
+      $('tradePlaybook').value = '';
+      renderSelectedPlaybookPreview();
+      setDefaultDate();
+      setRating(3);
+      clearScreenshotPreview();
+      renderAll();
+      toast('Trade zapisany.');
+      switchView('dashboard');
+    } catch (error) {
+      console.error(error);
+      toast('Nie udało się zapisać screenshotów. Spróbuj z mniejszymi obrazkami.');
+    }
+  });
+}
+
+
+function bindConfirmationFilter() {
+  const ids = ['cfConfirmation','cfKeyLevel','cfLiquidity','cfNewsSoon','cfNoDisplacement','cfHtfFvgAgainst'];
+  ids.forEach(id => $(id)?.addEventListener('change', renderConfirmationFilter));
+
+  $('cfAddPositiveBtn')?.addEventListener('click', () => addCustomConfirmationCriterion('positive'));
+  $('cfAddNegativeBtn')?.addEventListener('click', () => addCustomConfirmationCriterion('negative'));
+
+  ['cfAddPositiveName','cfAddNegativeName'].forEach(id => {
+    $(id)?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      event.preventDefault();
+      addCustomConfirmationCriterion(id.includes('Positive') ? 'positive' : 'negative');
+    });
+  });
+
+  ['cfCustomPositiveList','cfCustomNegativeList'].forEach(id => {
+    $(id)?.addEventListener('change', (event) => {
+      if (event.target.matches('[data-custom-cf-check]')) renderConfirmationFilter();
+    });
+    $(id)?.addEventListener('click', (event) => {
+      const button = event.target.closest('[data-cf-delete]');
+      if (!button) return;
+      const criterion = confirmationCriteria.find(item => item.id === button.dataset.cfDelete);
+      if (!criterion) return;
+      confirmationCriteria = confirmationCriteria.filter(item => item.id !== criterion.id);
+      saveConfirmationCriteria();
+      renderCustomConfirmationCriteria();
+      renderConfirmationFilter();
+      toast(`Usunięto filtr: ${criterion.name}`);
+    });
+  });
+
+  renderCustomConfirmationCriteria();
+  renderConfirmationFilter();
+}
+
+function addCustomConfirmationCriterion(side) {
+  const isPositive = side === 'positive';
+  const nameInput = $(isPositive ? 'cfAddPositiveName' : 'cfAddNegativeName');
+  const weightInput = $(isPositive ? 'cfAddPositiveWeight' : 'cfAddNegativeWeight');
+  const name = String(nameInput?.value || '').trim();
+  const weight = Number(weightInput?.value) === 2 ? 2 : 1;
+  if (!name) {
+    toast('Wpisz nazwę filtra.');
+    nameInput?.focus();
+    return;
+  }
+  const duplicate = confirmationCriteria.some(item => item.side === side && item.name.toLowerCase() === name.toLowerCase());
+  if (duplicate) {
+    toast('Taki filtr już istnieje po tej stronie.');
+    return;
+  }
+  if (confirmationCriteria.filter(item => item.side === side).length >= 20) {
+    toast('Maksymalnie 20 własnych filtrów na stronę.');
+    return;
+  }
+  confirmationCriteria.push({ id: cryptoRandomId(), name: name.slice(0, 60), side, weight });
+  saveConfirmationCriteria();
+  if (nameInput) nameInput.value = '';
+  if (weightInput) weightInput.value = '1';
+  renderCustomConfirmationCriteria();
+  renderConfirmationFilter();
+  toast(`Dodano filtr ${isPositive ? 'ZA' : 'PRZECIW'}: ${name}`);
+}
+
+function renderCustomConfirmationCriteria() {
+  const renderSide = (side, targetId) => {
+    const target = $(targetId);
+    if (!target) return;
+    const items = confirmationCriteria.filter(item => item.side === side);
+    target.innerHTML = items.length ? items.map(item => {
+      const positive = side === 'positive';
+      const sign = positive ? '+' : '−';
+      return `
+        <div class="confirmation-custom-row">
+          <label class="confirmation-item ${positive ? 'positive' : 'negative'} custom" for="cfCustom-${escapeHtml(item.id)}">
+            <input id="cfCustom-${escapeHtml(item.id)}" data-custom-cf-check type="checkbox" />
+            <span><strong>${escapeHtml(item.name)}</strong><small>Twój własny filtr</small></span>
+            <b>${sign}${item.weight}</b>
+          </label>
+          <button type="button" class="confirmation-delete" data-cf-delete="${escapeHtml(item.id)}" aria-label="Usuń filtr ${escapeHtml(item.name)}">×</button>
+        </div>`;
+    }).join('') : '<div class="confirmation-custom-empty">Brak własnych filtrów.</div>';
+  };
+  renderSide('positive', 'cfCustomPositiveList');
+  renderSide('negative', 'cfCustomNegativeList');
+}
+
+function getConfirmationFilterState() {
+  const customCriteria = confirmationCriteria.map(item => ({
+    id: item.id,
+    name: item.name,
+    side: item.side,
+    weight: item.weight,
+    checked: Boolean($(`cfCustom-${item.id}`)?.checked)
+  })).filter(item => item.checked);
+
+  const state = {
+    confirmation: Boolean($('cfConfirmation')?.checked),
+    keyLevel: Boolean($('cfKeyLevel')?.checked),
+    liquidity: Boolean($('cfLiquidity')?.checked),
+    newsSoon: Boolean($('cfNewsSoon')?.checked),
+    noDisplacement: Boolean($('cfNoDisplacement')?.checked),
+    htfFvgAgainst: Boolean($('cfHtfFvgAgainst')?.checked),
+    customCriteria
+  };
+  const result = calculateConfirmationFilter(state);
+  return { ...state, score: result.score, verdict: result.verdict };
+}
+
+function normalizeConfirmationFilter(value) {
+  if (!value || typeof value !== 'object') return null;
+  const customCriteria = (Array.isArray(value.customCriteria) ? value.customCriteria : []).map(item => ({
+    id: String(item?.id || cryptoRandomId()),
+    name: String(item?.name || '').trim().slice(0, 60),
+    side: item?.side === 'negative' ? 'negative' : 'positive',
+    weight: Number(item?.weight) === 2 ? 2 : 1,
+    checked: true
+  })).filter(item => item.name);
+  const state = {
+    confirmation: Boolean(value.confirmation),
+    keyLevel: Boolean(value.keyLevel),
+    liquidity: Boolean(value.liquidity),
+    newsSoon: Boolean(value.newsSoon),
+    noDisplacement: Boolean(value.noDisplacement),
+    htfFvgAgainst: Boolean(value.htfFvgAgainst),
+    customCriteria
+  };
+  const hasSelection = ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => state[key]) || customCriteria.length > 0;
+  if (!hasSelection) return null;
+  const calculated = calculateConfirmationFilter(state);
+  return { ...state, score: calculated.score, verdict: calculated.verdict };
+}
+
+function calculateConfirmationFilter(state) {
+  const custom = Array.isArray(state?.customCriteria) ? state.customCriteria.filter(item => item?.checked !== false) : [];
+  const selected = ['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => Boolean(state?.[key])) || custom.length > 0;
+  if (!selected) return { score: 0, verdict: 'WAIT', reason: 'Zaznacz to, co faktycznie widzisz. BIAS ≠ ENTRY.', selected: false };
+
+  const customScore = custom.reduce((sum, item) => {
+    const weight = Number(item.weight) === 2 ? 2 : 1;
+    return sum + (item.side === 'negative' ? -weight : weight);
+  }, 0);
+
+  const score =
+    (state.confirmation ? 2 : 0) +
+    (state.keyLevel ? 1 : 0) +
+    (state.liquidity ? 1 : 0) -
+    (state.newsSoon ? 2 : 0) -
+    (state.noDisplacement ? 2 : 0) -
+    (state.htfFvgAgainst ? 1 : 0) +
+    customScore;
+
+  let verdict = 'WAIT';
+  let reason = 'Setup jest mieszany — nie wymuszaj wejścia.';
+  if (score >= 3) {
+    verdict = 'TAKE IT';
+    reason = 'Przewaga potwierdzeń. Nadal respektuj plan, risk i invalidation.';
+  } else if (score <= 0) {
+    verdict = 'NO TRADE';
+    reason = 'Przeciwwskazania ważą tyle samo lub więcej niż potwierdzenia.';
+  }
+  return { score, verdict, reason, selected: true };
+}
+
+function renderConfirmationFilter() {
+  const verdictEl = $('confirmationVerdict');
+  const scoreEl = $('confirmationScore');
+  const reasonEl = $('confirmationReason');
+  if (!verdictEl || !scoreEl || !reasonEl) return;
+  const state = getConfirmationFilterState();
+  const result = calculateConfirmationFilter(state);
+  verdictEl.textContent = result.verdict;
+  verdictEl.className = `confirmation-verdict ${result.selected ? confirmationVerdictClass(result.verdict) : 'neutral'}`;
+  scoreEl.textContent = result.score > 0 ? `+${result.score}` : String(result.score);
+  reasonEl.textContent = result.reason;
+}
+
+function confirmationVerdictClass(verdict) {
+  if (verdict === 'TAKE IT') return 'take';
+  if (verdict === 'NO TRADE') return 'no-trade';
+  return 'wait';
+}
+
+function confirmationFilterHasData(filter) {
+  const custom = Array.isArray(filter?.customCriteria) ? filter.customCriteria : [];
+  return Boolean(filter && (['confirmation','keyLevel','liquidity','newsSoon','noDisplacement','htfFvgAgainst'].some(key => filter[key]) || custom.length));
+}
+
+function confirmationFilterDetailsHtml(filter) {
+  if (!confirmationFilterHasData(filter)) return '';
+  const positives = [];
+  const negatives = [];
+  if (filter.confirmation) positives.push('Confirmation');
+  if (filter.keyLevel) positives.push('Key Level');
+  if (filter.liquidity) positives.push('Liquidity');
+  if (filter.newsSoon) negatives.push('News soon');
+  if (filter.noDisplacement) negatives.push('No displacement');
+  if (filter.htfFvgAgainst) negatives.push('HTF FVG przeciwko');
+  (Array.isArray(filter.customCriteria) ? filter.customCriteria : []).forEach(item => {
+    const name = `${item.name} (${item.side === 'negative' ? '−' : '+'}${Number(item.weight) === 2 ? 2 : 1})`;
+    (item.side === 'negative' ? negatives : positives).push(name);
+  });
+  return `<details class="confirmation-summary"><summary>Confirmation Filter • score ${filter.score > 0 ? '+' : ''}${filter.score}</summary><div class="confirmation-details">${positives.length ? `<div><b>Za:</b> ${positives.map(escapeHtml).join(' • ')}</div>` : '<div><b>Za:</b> —</div>'}${negatives.length ? `<div><b>Przeciw:</b> ${negatives.map(escapeHtml).join(' • ')}</div>` : '<div><b>Przeciw:</b> —</div>'}<small>Filtr opisuje Twoją checklistę przed wejściem; nie jest sygnałem rynkowym.</small></div></details>`;
+}
+
+function setRating(value) {
+  $('tradeRating').value = String(value);
+  document.querySelectorAll('#ratingPicker button').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.rating) === value);
+  });
+}
+
+function bindHistory() {
+  ['historyFilter','historyInstrument','historySession','historyDirection','historyPlaybook','historyTag'].forEach(id => $(id).addEventListener('change', renderHistory));
+  $('historyList').addEventListener('click', async (event) => {
+    const button = event.target.closest('[data-delete-trade]');
+    if (button) {
+      const id = button.dataset.deleteTrade;
+      const trade = trades.find(t => t.id === id);
+      if (!trade) return;
+      if (!confirm(`Usunąć trade ${trade.instrument} z ${formatDate(trade.date)}?`)) return;
+      trades = trades.filter(t => t.id !== id);
+      saveTrades();
+      await deleteTradeScreenshots(id);
+      renderAll();
+      toast('Trade usunięty.');
+      return;
+    }
+
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+
+  $('recentTrades').addEventListener('click', (event) => {
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+}
+
+
+function bindPlaybookForm() {
+  const form = $('playbookForm');
+  if (!form) return;
+
+  $('tradePlaybook').addEventListener('change', () => {
+    applySelectedPlaybookToTrade();
+    renderSelectedPlaybookPreview();
+  });
+
+  $('playbookImage').addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      pendingPlaybookImageData = await fileToCompressedDataUrl(file);
+      renderPlaybookImagePreview(pendingPlaybookImageData);
+    } catch (error) {
+      console.error(error);
+      toast('Nie udało się wczytać obrazka playbooka.');
+    }
+  });
+
+  $('playbookImagePreview').addEventListener('click', (event) => {
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = $('playbookName').value.trim();
+    if (!name) {
+      toast('Wpisz nazwę setupu.');
+      return;
+    }
+
+    const editId = $('playbookEditId').value;
+    const existing = playbooks.find(p => p.id === editId);
+    const id = existing?.id || cryptoRandomId();
+    const minRRRaw = $('playbookMinRR').value.trim();
+    const item = {
+      id,
+      name,
+      direction: $('playbookDirection').value,
+      session: $('playbookSession').value,
+      minRR: minRRRaw === '' ? null : Number(String(minRRRaw).replace(',', '.')),
+      conditions: $('playbookConditions').value.trim(),
+      invalidation: $('playbookInvalidation').value.trim(),
+      target: $('playbookTarget').value.trim(),
+      note: $('playbookNote').value.trim(),
+      hasImage: Boolean(existing?.hasImage || pendingPlaybookImageData),
+      createdAt: existing?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    if (item.minRR != null && !Number.isFinite(item.minRR)) {
+      toast('Minimalne RR musi być liczbą.');
+      return;
+    }
+
+    if (existing) {
+      playbooks = playbooks.map(p => p.id === id ? item : p);
+    } else {
+      playbooks.push(item);
+    }
+
+    if (pendingPlaybookImageData) {
+      await savePlaybookImage(id, pendingPlaybookImageData);
+      item.hasImage = true;
+    }
+
+    playbooks.sort((a,b) => a.name.localeCompare(b.name, 'pl'));
+    savePlaybooks();
+    resetPlaybookForm();
+    renderPlaybooks();
+    renderPlaybookSelect();
+    renderPlaybookStats();
+    toast(existing ? 'Playbook zaktualizowany.' : 'Playbook zapisany.');
+  });
+
+  $('playbookCancelEdit').addEventListener('click', resetPlaybookForm);
+
+  $('playbookList').addEventListener('click', async (event) => {
+    const editBtn = event.target.closest('[data-edit-playbook]');
+    if (editBtn) {
+      await editPlaybook(editBtn.dataset.editPlaybook);
+      return;
+    }
+
+    const deleteBtn = event.target.closest('[data-delete-playbook]');
+    if (deleteBtn) {
+      const id = deleteBtn.dataset.deletePlaybook;
+      const item = playbooks.find(p => p.id === id);
+      if (!item) return;
+      if (!confirm(`Usunąć playbook „${item.name}”? Historyczne trade'y zostaną w journalu.`)) return;
+      playbooks = playbooks.filter(p => p.id !== id);
+      savePlaybooks();
+      await deletePlaybookImage(id);
+      resetPlaybookForm();
+      renderPlaybooks();
+      renderPlaybookSelect();
+      renderPlaybookStats();
+      toast('Playbook usunięty.');
+      return;
+    }
+
+    const useBtn = event.target.closest('[data-use-playbook]');
+    if (useBtn) {
+      switchView('add');
+      $('tradePlaybook').value = useBtn.dataset.usePlaybook;
+      applySelectedPlaybookToTrade();
+      renderSelectedPlaybookPreview();
+      return;
+    }
+
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+}
+
+function renderPlaybookSelect() {
+  const select = $('tradePlaybook');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = `<option value="">Bez playbooka</option>${playbooks.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')}`;
+  if (playbooks.some(p => p.id === current)) select.value = current;
+
+  const historySelect = $('historyPlaybook');
+  if (historySelect) {
+    const historyCurrent = historySelect.value || 'ALL';
+    historySelect.innerHTML = `<option value="ALL">Playbook: wszystkie</option><option value="NONE">Bez playbooka</option>${playbooks.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')}`;
+    if (historyCurrent === 'NONE' || historyCurrent === 'ALL' || playbooks.some(p => p.id === historyCurrent)) historySelect.value = historyCurrent;
+  }
+  renderSelectedPlaybookPreview();
+}
+
+function applySelectedPlaybookToTrade() {
+  const id = $('tradePlaybook')?.value;
+  const p = playbooks.find(item => item.id === id);
+  if (!p) return;
+  $('tradeModel').value = p.name;
+  if (p.direction === 'LONG') $('directionLong').checked = true;
+  if (p.direction === 'SHORT') $('directionShort').checked = true;
+  if (p.session && p.session !== 'ANY') $('tradeSession').value = p.session;
+  $('preInvalidation').value = p.invalidation || '';
+  $('preTarget').value = p.target || '';
+  $('preThesis').value = p.conditions || '';
+}
+
+function renderSelectedPlaybookPreview() {
+  const target = $('selectedPlaybookPreview');
+  if (!target) return;
+  const p = playbooks.find(item => item.id === $('tradePlaybook')?.value);
+  if (!p) {
+    target.textContent = 'Nie wybrano playbooka.';
+    target.classList.add('empty-state');
+    return;
+  }
+  target.classList.remove('empty-state');
+  target.innerHTML = `<strong>${escapeHtml(p.name)}</strong> • ${p.direction === 'ANY' ? 'oba kierunki' : escapeHtml(p.direction)} • ${p.session === 'ANY' ? 'dowolna sesja' : escapeHtml(p.session)}${p.minRR != null ? ` • min. ${escapeHtml(p.minRR)}R` : ''}${p.conditions ? `<br>${escapeHtml(shortenText(p.conditions, 180))}` : ''}`;
+}
+
+async function editPlaybook(id) {
+  const p = playbooks.find(item => item.id === id);
+  if (!p) return;
+  $('playbookEditId').value = p.id;
+  $('playbookName').value = p.name;
+  $('playbookDirection').value = p.direction || 'ANY';
+  $('playbookSession').value = p.session || 'ANY';
+  $('playbookMinRR').value = p.minRR == null ? '' : String(p.minRR);
+  $('playbookConditions').value = p.conditions || '';
+  $('playbookInvalidation').value = p.invalidation || '';
+  $('playbookTarget').value = p.target || '';
+  $('playbookNote').value = p.note || '';
+  pendingPlaybookImageData = null;
+  const currentImage = await getPlaybookImage(p.id);
+  renderPlaybookImagePreview(currentImage);
+  $('playbookSaveBtn').textContent = 'Zapisz zmiany';
+  $('playbookCancelEdit').hidden = false;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function resetPlaybookForm() {
+  $('playbookForm')?.reset();
+  if ($('playbookEditId')) $('playbookEditId').value = '';
+  pendingPlaybookImageData = null;
+  if ($('playbookSaveBtn')) $('playbookSaveBtn').textContent = 'Zapisz playbook';
+  if ($('playbookCancelEdit')) $('playbookCancelEdit').hidden = true;
+  renderPlaybookImagePreview('');
+}
+
+function renderPlaybookImagePreview(src) {
+  const target = $('playbookImagePreview');
+  if (!target) return;
+  if (!src) {
+    target.innerHTML = 'Nie wybrano obrazka.';
+    target.classList.add('empty-state');
+    return;
+  }
+  target.classList.remove('empty-state');
+  target.innerHTML = `<button type="button" class="shot-thumb preview-thumb" data-shot-src="${src}" aria-label="Podgląd przykładu playbooka"><img src="${src}" alt="Przykład setupu" /></button>`;
+}
+
+async function renderPlaybooks() {
+  const target = $('playbookList');
+  if (!target) return;
+  if (!playbooks.length) {
+    target.textContent = 'Nie masz jeszcze żadnego playbooka.';
+    target.classList.add('empty-state');
+    return;
+  }
+  target.classList.remove('empty-state');
+  const rows = await Promise.all(playbooks.map(async (p) => {
+    const sample = getTradesForPlaybook(p);
+    const edge = buildEdgeRow(p.name, sample);
+    const image = p.hasImage ? await getPlaybookImage(p.id) : '';
+    return `<article class="playbook-card">
+      <div class="playbook-card-main">
+        <div class="playbook-cover">${image ? `<img src="${image}" data-shot-src="${image}" alt="Przykład ${escapeHtml(p.name)}" />` : 'Brak przykładu'}</div>
+        <div>
+          <div class="playbook-title-row"><h3>${escapeHtml(p.name)}</h3><span class="playbook-badge">PLAYBOOK</span></div>
+          <div class="playbook-meta">
+            <span class="mini-chip">${p.direction === 'ANY' ? 'LONG / SHORT' : escapeHtml(p.direction)}</span>
+            <span class="mini-chip">${p.session === 'ANY' ? 'Dowolna sesja' : escapeHtml(p.session)}</span>
+            ${p.minRR != null ? `<span class="mini-chip">Min. ${escapeHtml(p.minRR)}R</span>` : ''}
+          </div>
+          ${p.conditions ? `<p class="playbook-copy"><b>Warunki:</b> ${escapeHtml(p.conditions)}</p>` : ''}
+          ${p.invalidation ? `<p class="playbook-copy"><b>Invalidation:</b> ${escapeHtml(p.invalidation)}</p>` : ''}
+          ${p.target ? `<p class="playbook-copy"><b>Target:</b> ${escapeHtml(p.target)}</p>` : ''}
+          ${p.note ? `<p class="playbook-copy"><b>Uwagi:</b> ${escapeHtml(p.note)}</p>` : ''}
+        </div>
+      </div>
+      <div class="playbook-stats">
+        <div class="playbook-stat"><span>Trade'y</span><strong>${edge.count}</strong></div>
+        <div class="playbook-stat"><span>Win rate</span><strong>${Math.round(edge.winRate)}%</strong></div>
+        <div class="playbook-stat"><span>Śr. R</span><strong class="${metricClass(edge.avgR)}">${formatR(edge.avgR)}</strong></div>
+        <div class="playbook-stat"><span>Łącznie</span><strong class="${metricClass(edge.totalR)}">${formatR(edge.totalR)}</strong></div>
+      </div>
+      <div class="playbook-card-actions">
+        <button class="ghost-btn" type="button" data-use-playbook="${escapeHtml(p.id)}">Użyj w trade</button>
+        <button class="ghost-btn" type="button" data-edit-playbook="${escapeHtml(p.id)}">Edytuj</button>
+        <button class="danger-btn" type="button" data-delete-playbook="${escapeHtml(p.id)}">Usuń</button>
+      </div>
+    </article>`;
+  }));
+  target.innerHTML = rows.join('');
+}
+
+function renderPlaybookStats() {
+  const target = $('playbookStats');
+  if (!target) return;
+  const rows = playbooks.map(p => buildEdgeRow(p.name, getTradesForPlaybook(p)))
+    .filter(row => row.count > 0)
+    .sort((a,b) => b.avgR - a.avgR || b.totalR - a.totalR || b.count - a.count);
+  renderEdgeRows('playbookStats', rows, 12);
+}
+
+function getTradesForPlaybook(playbook) {
+  const normalized = normalizeText(playbook.name);
+  return trades.filter(t => t.playbookId === playbook.id || (!t.playbookId && normalizeText(t.model) === normalized));
+}
+
+function resolvePlaybookName(id) {
+  return playbooks.find(p => p.id === id)?.name || '';
+}
+
+function normalizeText(value) {
+  return String(value || '').trim().toLocaleLowerCase('pl-PL');
+}
+
+function shortenText(value, max) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function metricClass(value) {
+  return value > 0 ? 'metric-positive' : value < 0 ? 'metric-negative' : 'metric-flat';
+}
+
+async function collectPlaybookImages() {
+  const result = {};
+  for (const p of playbooks) {
+    const src = await getPlaybookImage(p.id);
+    if (src) result[p.id] = src;
+  }
+  return result;
+}
+
+function bindBackup() {
+  const exportBtn = $('exportBackupBtn');
+  const importBtn = $('importBackupBtn');
+  const importFile = $('backupImportFile');
+  if (!exportBtn || !importBtn || !importFile) return;
+
+  exportBtn.addEventListener('click', async () => {
+    try {
+      toast('Przygotowuję backup...');
+      const payload = await buildBackupPayload();
+      const json = JSON.stringify(payload);
+
+      if (window.AndroidBackupBridge?.exportBackup) {
+        window.AndroidBackupBridge.exportBackup(json);
+      } else {
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = backupFileName();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        toast('Backup wyeksportowany.');
+      }
+    } catch (error) {
+      console.error(error);
+      toast('Nie udało się utworzyć backupu.');
+    }
+  });
+
+  importBtn.addEventListener('click', () => {
+    if (window.AndroidBackupBridge?.importBackup) {
+      window.AndroidBackupBridge.importBackup();
+    } else {
+      importFile.click();
+    }
+  });
+
+  importFile.addEventListener('change', async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      await restoreBackup(await file.text());
+    } catch (error) {
+      console.error(error);
+      toast('Nie udało się wczytać backupu.');
+    } finally {
+      importFile.value = '';
+    }
+  });
+}
+
+window.importBackupFromNative = async function(rawJson) {
+  try {
+    await restoreBackup(rawJson);
+  } catch (error) {
+    console.error(error);
+    toast('Nie udało się wczytać backupu.');
+  }
+};
+
+window.backupExportFinished = function(success) {
+  toast(success ? 'Backup zapisany.' : 'Anulowano zapis backupu.');
+};
+
+async function buildBackupPayload() {
+  const screenshots = {};
+  for (const trade of trades) {
+    const shots = await getTradeScreenshots(trade.id);
+    if (shots.length) screenshots[trade.id] = shots;
+  }
+
+  return {
+    type: 'SMC_TRADING_JOURNAL_BACKUP',
+    schemaVersion: 4,
+    appVersion: '5.6',
+    exportedAt: new Date().toISOString(),
+    trades,
+    reviews,
+    playbooks,
+    confirmationCriteria,
+    tradeTags,
+    screenshots,
+    playbookImages: await collectPlaybookImages()
+  };
+}
+
+async function restoreBackup(rawJson) {
+  const parsed = JSON.parse(rawJson);
+  if (!parsed || parsed.type !== 'SMC_TRADING_JOURNAL_BACKUP' || !Array.isArray(parsed.trades) || !Array.isArray(parsed.reviews)) {
+    throw new Error('Nieprawidłowy format backupu');
+  }
+
+  const importedPlaybooks = migratePlaybooks(Array.isArray(parsed.playbooks) ? parsed.playbooks : []);
+  const importedConfirmationCriteria = migrateConfirmationCriteria(Array.isArray(parsed.confirmationCriteria) ? parsed.confirmationCriteria : []);
+  const importedTradeTags = migrateTradeTags(Array.isArray(parsed.tradeTags) ? parsed.tradeTags : DEFAULT_TRADE_TAGS);
+  const playbookImages = parsed.playbookImages && typeof parsed.playbookImages === 'object' ? parsed.playbookImages : {};
+
+  if (!confirm(`Import zastąpi obecne dane. Przywrócić ${parsed.trades.length} trade'ów, ${parsed.reviews.length} review, ${importedPlaybooks.length} playbooków, ${importedConfirmationCriteria.length} własnych filtrów i ${importedTradeTags.length} tagów?`)) {
+    toast('Import anulowany.');
+    return;
+  }
+
+  const importedTrades = migrateTrades(parsed.trades);
+  const importedReviews = parsed.reviews;
+  const screenshots = parsed.screenshots && typeof parsed.screenshots === 'object' ? parsed.screenshots : {};
+
+  await clearAllScreenshots();
+  for (const trade of importedTrades) {
+    const shots = Array.isArray(screenshots[trade.id]) ? screenshots[trade.id] : [];
+    if (shots.length) await saveTradeScreenshots(trade.id, shots);
+    trade.screenshotCount = shots.length;
+  }
+  for (const playbook of importedPlaybooks) {
+    const src = typeof playbookImages[playbook.id] === 'string' ? playbookImages[playbook.id] : '';
+    if (src) {
+      await savePlaybookImage(playbook.id, src);
+      playbook.hasImage = true;
+    } else {
+      playbook.hasImage = false;
+    }
+  }
+
+  trades = importedTrades.sort(sortTradesAsc);
+  reviews = importedReviews;
+  playbooks = importedPlaybooks;
+  confirmationCriteria = importedConfirmationCriteria;
+  tradeTags = importedTradeTags;
+  saveTrades();
+  saveReviews();
+  savePlaybooks();
+  saveConfirmationCriteria();
+  saveTradeTags();
+  renderTradeTagGrid([]);
+  renderTradeTagFilter();
+  renderCustomConfirmationCriteria();
+  renderConfirmationFilter();
+  renderPlaybookSelect();
+  renderAll();
+  toast('Backup przywrócony.');
+}
+
+function backupFileName() {
+  const now = new Date();
+  return `SMC-Trading-Journal-backup-${toInputDate(now)}.json`;
+}
+
+function bindReviewForm() {
+  $('reviewForm').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const weekKey = getWeekKey(new Date());
+    const review = {
+      id: cryptoRandomId(),
+      weekKey,
+      savedAt: new Date().toISOString(),
+      bias: $('reviewBias').value.trim(),
+      confluences: $('reviewConfluences').value.trim(),
+      worked: $('reviewWorked').value.trim(),
+      change: $('reviewChange').value.trim(),
+      plan: $('reviewPlan').value.trim()
+    };
+
+    const existingIndex = reviews.findIndex(r => r.weekKey === weekKey);
+    if (existingIndex >= 0) {
+      review.id = reviews[existingIndex].id;
+      reviews[existingIndex] = review;
+    } else {
+      reviews.push(review);
+    }
+    reviews.sort((a,b) => b.weekKey.localeCompare(a.weekKey));
+    saveReviews();
+    renderReviews();
+    toast(existingIndex >= 0 ? 'Review zaktualizowany.' : 'Review zapisany.');
+  });
+}
+
+function bindScreenshotPreview() {
+  $('tradeScreenshots').addEventListener('change', async (event) => {
+    const files = [...(event.target.files || [])];
+    if (!files.length) {
+      clearScreenshotPreview();
+      return;
+    }
+    $('screenshotPreview').classList.remove('empty-state');
+    $('screenshotPreview').innerHTML = '<div class="mini-loading">Ładowanie podglądu...</div>';
+    try {
+      const previews = await Promise.all(files.map(fileToCompressedDataUrl));
+      $('screenshotPreview').innerHTML = previews.map((src, index) => `
+        <button type="button" class="shot-thumb preview-thumb" data-shot-src="${src}" aria-label="Podgląd screenshotu ${index + 1}">
+          <img src="${src}" alt="Podgląd screenshotu ${index + 1}" />
+        </button>
+      `).join('');
+    } catch (error) {
+      console.error(error);
+      clearScreenshotPreview();
+      toast('Nie udało się wczytać screenshotów.');
+    }
+  });
+
+  $('screenshotPreview').addEventListener('click', (event) => {
+    const image = event.target.closest('[data-shot-src]');
+    if (image) openLightbox(image.dataset.shotSrc);
+  });
+}
+
+function clearScreenshotPreview() {
+  const preview = $('screenshotPreview');
+  preview.innerHTML = 'Nie wybrano screenshotów.';
+  preview.classList.add('empty-state');
+}
+
+function bindLightbox() {
+  $('lightboxClose').addEventListener('click', closeLightbox);
+  $('lightbox').addEventListener('click', (event) => {
+    if (event.target.id === 'lightbox') closeLightbox();
+  });
+}
+
+function openLightbox(src) {
+  $('lightboxImage').src = src;
+  $('lightbox').hidden = false;
+  document.body.classList.add('lightbox-open');
+}
+
+function closeLightbox() {
+  $('lightbox').hidden = true;
+  $('lightboxImage').src = '';
+  document.body.classList.remove('lightbox-open');
+}
+
+function renderAll() {
+  renderDashboard();
+  renderHistory();
+  renderReviews();
+  renderPlaybooks();
+  renderPlaybookSelect();
+  renderTradeTagFilter();
+}
+
+function renderDashboard() {
+  const tp = trades.filter(t => t.result === 'TP').length;
+  const sl = trades.filter(t => t.result === 'SL').length;
+  const be = trades.filter(t => t.result === 'BE').length;
+  const closed = tp + sl;
+  const winRate = closed ? Math.round((tp / closed) * 100) : 0;
+  const totalR = trades.reduce((sum, trade) => sum + tradeToR(trade), 0);
+  const avgR = trades.length ? totalR / trades.length : 0;
+  const mistakes = trades.filter(t => t.mistake).length;
+  const mistakeRate = trades.length ? Math.round((mistakes / trades.length) * 100) : 0;
+
+  $('statWinRate').textContent = `${winRate}%`;
+  $('statClosed').textContent = `${closed} rozstrzygniętych`;
+  $('statTP').textContent = tp;
+  $('statSL').textContent = sl;
+  $('statBE').textContent = be;
+  $('statMistakes').textContent = mistakes;
+  $('statMistakeRate').textContent = `${mistakeRate}% wszystkich trade'ów`;
+  const expectancy = trades.length ? totalR / trades.length : 0;
+  const grossWin = trades.filter(t => tradeToR(t) > 0).reduce((sum,t) => sum + tradeToR(t), 0);
+  const grossLossAbs = Math.abs(trades.filter(t => tradeToR(t) < 0).reduce((sum,t) => sum + tradeToR(t), 0));
+  const profitFactor = grossLossAbs ? grossWin / grossLossAbs : (grossWin > 0 ? Infinity : 0);
+  const winners = trades.filter(t => tradeToR(t) > 0);
+  const losers = trades.filter(t => tradeToR(t) < 0);
+  const avgWinner = winners.length ? winners.reduce((s,t) => s + tradeToR(t), 0) / winners.length : 0;
+  const avgLoser = losers.length ? losers.reduce((s,t) => s + tradeToR(t), 0) / losers.length : 0;
+  $('statExpectancy').textContent = formatR(expectancy);
+  $('statProfitFactor').textContent = Number.isFinite(profitFactor) ? profitFactor.toFixed(2) : '∞';
+  $('statDrawdown').textContent = formatR(calculateMaxDrawdown(trades));
+  $('statAvgWL').textContent = `${formatR(avgWinner)} / ${formatR(avgLoser)}`;
+  $('statTotalR').textContent = formatR(totalR);
+  $('statAvgR').textContent = formatR(avgR);
+  $('equityValue').textContent = formatR(totalR);
+
+  const latest = [...trades].sort(sortTradesDesc).slice(0, 4);
+  $('recentTrades').innerHTML = latest.length ? latest.map(t => tradeCardHtml(t, false)).join('') : 'Brak trade\'ów. Dodaj pierwszy setup.';
+  $('recentTrades').classList.toggle('empty-state', latest.length === 0);
+  renderWeeklyDashboard();
+  renderEdgeAnalytics();
+  renderConfirmationFilterStats();
+  renderPlaybookStats();
+  drawEquityChart();
+  hydrateVisibleScreenshots();
+}
+
+function renderWeeklyDashboard() {
+  const current = getWeekWindow(new Date());
+  const previous = {
+    start: addDays(current.start, -7),
+    end: addDays(current.end, -7)
+  };
+  const currentTrades = trades.filter(t => dateInRange(t.date, current.start, current.end));
+  const previousTrades = trades.filter(t => dateInRange(t.date, previous.start, previous.end));
+  const now = summarizeWeek(currentTrades);
+  const prev = summarizeWeek(previousTrades);
+
+  $('weekRangeLabel').textContent = `${formatShortDate(current.start)} – ${formatShortDate(current.end)}`;
+  $('weekCompareLabel').textContent = `vs ${formatShortDate(previous.start)} – ${formatShortDate(previous.end)}`;
+  $('weekTotalR').textContent = formatR(now.totalR);
+  $('weekTrades').textContent = now.count;
+  $('weekTradesDelta').textContent = deltaLabel(now.count - prev.count, ' trade');
+  $('weekWinRate').textContent = `${Math.round(now.winRate)}%`;
+  $('weekWinRateDelta').textContent = deltaLabel(Math.round(now.winRate - prev.winRate), ' pp');
+  $('weekResults').textContent = `${now.tp} / ${now.sl} / ${now.be}`;
+  $('weekPlanRate').textContent = `${Math.round(now.planRate)}%`;
+  $('weekPlanDelta').textContent = `${deltaLabel(Math.round(now.planRate - prev.planRate), ' pp')} • zgodność z planem`;
+  $('weekMistakes').textContent = now.mistakes;
+  $('weekMistakeDelta').textContent = deltaLabel(now.mistakes - prev.mistakes, ' błędów', true);
+  $('weekExpectancy').textContent = formatR(now.expectancy);
+  $('weekExpectancyDelta').textContent = deltaR(now.expectancy - prev.expectancy);
+  $('weekBestSession').textContent = bestGroupLabel(currentTrades, t => t.session) || '—';
+  $('weekBestModel').textContent = bestGroupLabel(currentTrades, t => t.model) || '—';
+  $('weekTopMistake').textContent = mostCommonLabel(currentTrades.filter(t => t.mistakeType), t => t.mistakeType) || '—';
+}
+
+function summarizeWeek(source) {
+  const tp = source.filter(t => t.result === 'TP').length;
+  const sl = source.filter(t => t.result === 'SL').length;
+  const be = source.filter(t => t.result === 'BE').length;
+  const closed = tp + sl;
+  const totalR = source.reduce((sum, t) => sum + tradeToR(t), 0);
+  const planned = source.filter(t => t.planFollowed !== false).length;
+  return {
+    count: source.length,
+    tp, sl, be,
+    totalR,
+    winRate: closed ? (tp / closed) * 100 : 0,
+    expectancy: source.length ? totalR / source.length : 0,
+    planRate: source.length ? (planned / source.length) * 100 : 0,
+    mistakes: source.filter(t => t.mistake).length
+  };
+}
+
+function getWeekWindow(date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const mondayOffset = (d.getDay() + 6) % 7;
+  const start = addDays(d, -mondayOffset);
+  const end = addDays(start, 6);
+  return { start, end };
+}
+
+function addDays(date, days) {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+function dateInRange(dateString, start, end) {
+  if (!dateString) return false;
+  const [y, m, d] = dateString.split('-').map(Number);
+  const value = new Date(y, m - 1, d);
+  return value >= start && value <= end;
+}
+
+function formatShortDate(date) {
+  return new Intl.DateTimeFormat('pl-PL', { day: '2-digit', month: '2-digit' }).format(date);
+}
+
+function deltaLabel(value, suffix, lowerIsBetter = false) {
+  if (!value) return 'bez zmiany';
+  const sign = value > 0 ? '+' : '';
+  const positive = lowerIsBetter ? value < 0 : value > 0;
+  return `${positive ? '▲' : '▼'} ${sign}${value}${suffix}`;
+}
+
+function deltaR(value) {
+  if (Math.abs(value) < 0.005) return 'bez zmiany';
+  return `${value > 0 ? '▲' : '▼'} ${formatR(value)}`;
+}
+
+function bestGroupLabel(source, keyFn) {
+  const groups = new Map();
+  source.forEach(trade => {
+    const key = String(keyFn(trade) || '').trim();
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(trade);
+  });
+  const rows = [...groups.entries()].map(([name, sample]) => buildEdgeRow(name, sample));
+  rows.sort((a, b) => b.totalR - a.totalR || b.avgR - a.avgR || b.count - a.count);
+  return rows[0] ? `${rows[0].name} (${formatR(rows[0].totalR)})` : '';
+}
+
+function mostCommonLabel(source, keyFn) {
+  const counts = new Map();
+  source.forEach(item => {
+    const key = String(keyFn(item) || '').trim();
+    if (!key) return;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const top = [...counts.entries()].sort((a,b) => b[1] - a[1])[0];
+  return top ? `${top[0]} (${top[1]})` : '';
+}
+
+function renderHistory() {
+  const filter = $('historyFilter').value;
+  const instrument = $('historyInstrument').value;
+  const session = $('historySession').value;
+  const direction = $('historyDirection').value;
+  const playbook = $('historyPlaybook').value;
+  const tag = $('historyTag').value;
+  const list = [...trades].filter(t => {
+    const resultOk = filter === 'ALL' || (filter === 'MISTAKE' ? t.mistake : t.result === filter);
+    const instrumentOk = instrument === 'ALL' || t.instrument === instrument;
+    const sessionOk = session === 'ALL' || t.session === session;
+    const directionOk = direction === 'ALL' || t.direction === direction;
+    const playbookOk = playbook === 'ALL' || (playbook === 'NONE' ? !t.playbookId : t.playbookId === playbook);
+    const tagOk = tag === 'ALL' || (Array.isArray(t.tags) && t.tags.includes(tag));
+    return resultOk && instrumentOk && sessionOk && directionOk && playbookOk && tagOk;
+  }).sort(sortTradesDesc);
+  $('historyList').innerHTML = list.length ? list.map(t => tradeCardHtml(t, true)).join('') : 'Brak trade\'ów dla wybranego filtra.';
+  $('historyList').classList.toggle('empty-state', list.length === 0);
+  hydrateVisibleScreenshots();
+}
+
+function tradeCardHtml(trade, deletable) {
+  const confluences = trade.confluences?.length
+    ? trade.confluences.map(c => `<span class="mini-chip">${escapeHtml(c)}</span>`).join('')
+    : '<span class="mini-chip">bez zaznaczonych confluencji</span>';
+  const tagChips = Array.isArray(trade.tags) && trade.tags.length
+    ? trade.tags.map(tag => `<span class="mini-chip trade-tag-chip">${escapeHtml(tag)}</span>`).join('')
+    : '';
+
+  return `
+    <article class="trade-card">
+      <div class="trade-top">
+        <div class="trade-main">
+          <div class="trade-title">
+            <span class="result-badge ${trade.result}">${trade.result}</span>
+            <span>${escapeHtml(trade.instrument || 'NQ')}</span>
+            ${trade.direction ? `<span class="direction-badge ${trade.direction}">${escapeHtml(trade.direction)}</span>` : ''}
+            ${(trade.playbookName || resolvePlaybookName(trade.playbookId)) ? `<span class="playbook-badge">${escapeHtml(trade.playbookName || resolvePlaybookName(trade.playbookId))}</span>` : ''}
+            ${confirmationFilterHasData(trade.confirmationFilter) ? `<span class="confirmation-badge ${confirmationVerdictClass(trade.confirmationFilter.verdict)}">${escapeHtml(trade.confirmationFilter.verdict)}</span>` : ''}
+            <span class="rr-badge ${tradeToR(trade) > 0 ? 'positive' : tradeToR(trade) < 0 ? 'negative' : 'flat'}">${formatR(tradeToR(trade))}</span>
+            <span>Setup ${Number(trade.rating || 0)}/5</span>
+            ${trade.mistake ? '<span class="mistake-badge">BŁĄD</span>' : '<span class="mistake-badge clean">PLAN</span>'}
+          </div>
+          <div class="trade-meta">${formatDate(trade.date)} • ${escapeHtml(trade.session || 'bez sesji')} • ${trade.confluences?.length || 0} confluencji • ${trade.screenshotCount || 0} screenów</div>
+          ${trade.model ? `<div class="trade-model">${escapeHtml(trade.model)}</div>` : ''}
+          <div class="process-row"><span class="mini-chip">${trade.planFollowed !== false ? 'Plan ✓' : 'Plan ✕'}</span><span class="mini-chip">Emocja: ${escapeHtml(trade.emotion || 'Neutral')}</span>${trade.mistakeType ? `<span class="mini-chip mistake-chip">${escapeHtml(trade.mistakeType)}</span>` : ''}</div>
+          ${tagChips ? `<div class="trade-tags-row">${tagChips}</div>` : ''}
+          ${(trade.preBias || trade.preThesis || trade.preInvalidation || trade.preTarget || trade.preMaxRisk != null) ? `<details class="pretrade-summary"><summary>Pre-Trade Plan</summary><div class="pretrade-details">${trade.preBias ? `<span><b>Bias:</b> ${escapeHtml(trade.preBias)}</span>` : ''}${trade.preMaxRisk != null ? `<span><b>Max risk:</b> ${escapeHtml(trade.preMaxRisk)}R</span>` : ''}${trade.preInvalidation ? `<span><b>Invalidation:</b> ${escapeHtml(trade.preInvalidation)}</span>` : ''}${trade.preTarget ? `<span><b>Target:</b> ${escapeHtml(trade.preTarget)}</span>` : ''}${trade.preThesis ? `<p>${escapeHtml(trade.preThesis)}</p>` : ''}</div></details>` : ''}
+          ${confirmationFilterDetailsHtml(trade.confirmationFilter)}
+        </div>
+        ${deletable ? `<button class="danger-btn" type="button" data-delete-trade="${trade.id}">Usuń</button>` : ''}
+      </div>
+      <div class="confluence-row">${confluences}</div>
+      ${trade.note ? `<div class="trade-note">${escapeHtml(trade.note)}</div>` : ''}
+      <div class="screenshot-grid trade-shot-grid" data-trade-shots="${trade.id}">
+        ${trade.screenshotCount ? '<div class="mini-loading">Ładowanie screenshotów...</div>' : '<div class="no-shots">Brak screenshotów.</div>'}
+      </div>
+    </article>
+  `;
+}
+
+
+function renderConfirmationFilterStats() {
+  const sample = trades.filter(t => confirmationFilterHasData(t.confirmationFilter));
+  renderGroupedStats('confirmationFilterStats', sample, t => t.confirmationFilter?.verdict || '', 3);
+}
+
+function renderEdgeAnalytics() {
+  renderConfluenceStats();
+  renderTradeTagStats();
+  renderGroupedStats('sessionStats', trades.filter(t => t.session), t => t.session, 4);
+  renderGroupedStats('directionStats', trades.filter(t => t.direction), t => t.direction, 2);
+  renderGroupedStats('mistakeStats', trades, t => t.mistake ? 'Z błędem' : 'Bez błędu', 2);
+  renderGroupedStats('modelStats', trades.filter(t => t.model), t => t.model.trim(), 8);
+}
+
+function renderConfluenceStats() {
+  const rows = CONFLUENCES.map(name => {
+    const sample = trades.filter(t => Array.isArray(t.confluences) && t.confluences.includes(name));
+    return buildEdgeRow(name, sample);
+  }).filter(row => row.count > 0)
+    .sort((a, b) => b.avgR - a.avgR || b.winRate - a.winRate || b.count - a.count);
+
+  renderEdgeRows('confluenceStats', rows, 8);
+}
+
+function renderTradeTagStats() {
+  const groups = new Map();
+  trades.forEach(trade => {
+    (Array.isArray(trade.tags) ? trade.tags : []).forEach(tag => {
+      const name = String(tag || '').trim();
+      if (!name) return;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(trade);
+    });
+  });
+  const rows = [...groups.entries()]
+    .map(([name, sample]) => buildEdgeRow(name, sample))
+    .sort((a, b) => b.avgR - a.avgR || b.totalR - a.totalR || b.count - a.count);
+  renderEdgeRows('tradeTagStats', rows, 12);
+}
+
+function renderGroupedStats(targetId, sourceTrades, keyFn, limit = 8) {
+  const groups = new Map();
+  sourceTrades.forEach(trade => {
+    const rawKey = keyFn(trade);
+    const key = String(rawKey || '').trim();
+    if (!key) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(trade);
+  });
+
+  const rows = [...groups.entries()]
+    .map(([name, sample]) => buildEdgeRow(name, sample))
+    .sort((a, b) => b.avgR - a.avgR || b.winRate - a.winRate || b.count - a.count);
+
+  renderEdgeRows(targetId, rows, limit);
+}
+
+function buildEdgeRow(name, sample) {
+  const tp = sample.filter(t => t.result === 'TP').length;
+  const sl = sample.filter(t => t.result === 'SL').length;
+  const closed = tp + sl;
+  const winRate = closed ? (tp / closed) * 100 : 0;
+  const totalR = sample.reduce((sum, trade) => sum + tradeToR(trade), 0);
+  const avgR = sample.length ? totalR / sample.length : 0;
+  return { name, count: sample.length, winRate, totalR, avgR };
+}
+
+function renderEdgeRows(targetId, rows, limit) {
+  const target = $(targetId);
+  const visible = rows.slice(0, limit);
+  if (!visible.length) {
+    target.innerHTML = 'Brak danych do analizy.';
+    target.classList.add('empty-state');
+    return;
+  }
+
+  target.classList.remove('empty-state');
+  target.innerHTML = `
+    <div class="edge-row edge-head">
+      <span>Nazwa</span><span>Trade</span><span>WR</span><span>Śr. R</span><span>Σ R</span>
+    </div>
+    ${visible.map(row => `
+      <div class="edge-row">
+        <strong>${escapeHtml(row.name)}</strong>
+        <span>${row.count}</span>
+        <span>${Math.round(row.winRate)}%</span>
+        <span class="${row.avgR > 0 ? 'metric-positive' : row.avgR < 0 ? 'metric-negative' : 'metric-flat'}">${formatR(row.avgR)}</span>
+        <span class="${row.totalR > 0 ? 'metric-positive' : row.totalR < 0 ? 'metric-negative' : 'metric-flat'}">${formatR(row.totalR)}</span>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderReviews() {
+  const currentWeek = getWeekKey(new Date());
+  $('reviewWeekLabel').textContent = `Tydzień ${formatWeekLabel(currentWeek)}`;
+
+  const current = reviews.find(r => r.weekKey === currentWeek);
+  $('reviewBias').value = current?.bias || '';
+  $('reviewConfluences').value = current?.confluences || '';
+  $('reviewWorked').value = current?.worked || '';
+  $('reviewChange').value = current?.change || '';
+  $('reviewPlan').value = current?.plan || '';
+
+  const sorted = [...reviews].sort((a,b) => b.weekKey.localeCompare(a.weekKey)).slice(0, 8);
+  $('reviewHistory').innerHTML = sorted.length ? sorted.map(review => `
+    <details class="review-card">
+      <summary>Tydzień ${formatWeekLabel(review.weekKey)}</summary>
+      <dl>
+        <dt>Bias</dt><dd>${escapeHtml(review.bias || '—')}</dd>
+        <dt>Confluencje</dt><dd>${escapeHtml(review.confluences || '—')}</dd>
+        <dt>Co zadziałało</dt><dd>${escapeHtml(review.worked || '—')}</dd>
+        <dt>Co zmienić</dt><dd>${escapeHtml(review.change || '—')}</dd>
+        <dt>Plan</dt><dd>${escapeHtml(review.plan || '—')}</dd>
+      </dl>
+    </details>
+  `).join('') : 'Brak zapisanych review.';
+  $('reviewHistory').classList.toggle('empty-state', sorted.length === 0);
+}
+
+async function hydrateVisibleScreenshots() {
+  const containers = [...document.querySelectorAll('[data-trade-shots]')];
+  await Promise.all(containers.map(async (container) => {
+    const tradeId = container.dataset.tradeShots;
+    const shots = await getTradeScreenshots(tradeId);
+    if (!shots.length) {
+      container.innerHTML = '<div class="no-shots">Brak screenshotów.</div>';
+      return;
+    }
+    container.innerHTML = shots.map((src, index) => `
+      <button type="button" class="shot-thumb" data-shot-src="${src}" aria-label="Otwórz screenshot ${index + 1}">
+        <img src="${src}" alt="Screenshot trade\'a ${index + 1}" />
+      </button>
+    `).join('');
+  }));
+}
+
+function drawEquityChart() {
+  const canvas = $('equityChart');
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const h = rect.height;
+  const pad = { l: 34, r: 12, t: 16, b: 26 };
+  ctx.clearRect(0, 0, w, h);
+
+  const ordered = [...trades].sort(sortTradesAsc);
+  const series = [0];
+  ordered.forEach(t => series.push(series[series.length - 1] + tradeToR(t)));
+
+  if (series.length === 1) {
+    ctx.fillStyle = '#707b8e';
+    ctx.font = '12px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('Dodaj trade, aby zobaczyć equity curve', w / 2, h / 2);
+    return;
+  }
+
+  const min = Math.min(...series, 0);
+  const max = Math.max(...series, 0);
+  const range = Math.max(2, max - min);
+  const yMin = min - Math.max(.5, range * .15);
+  const yMax = max + Math.max(.5, range * .15);
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+  const xFor = i => pad.l + (i / Math.max(1, series.length - 1)) * plotW;
+  const yFor = v => pad.t + ((yMax - v) / (yMax - yMin)) * plotH;
+
+  ctx.strokeStyle = '#222a36';
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#768195';
+  ctx.font = '10px system-ui';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const value = yMin + (i / 4) * (yMax - yMin);
+    const y = yFor(value);
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(w - pad.r, y);
+    ctx.stroke();
+    ctx.fillText(`${value.toFixed(value % 1 ? 1 : 0)}R`, pad.l - 6, y + 3);
+  }
+
+  const gradient = ctx.createLinearGradient(0, pad.t, 0, h - pad.b);
+  gradient.addColorStop(0, 'rgba(111,140,255,.28)');
+  gradient.addColorStop(1, 'rgba(111,140,255,0)');
+
+  ctx.beginPath();
+  series.forEach((v, i) => {
+    const x = xFor(i), y = yFor(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.lineTo(xFor(series.length - 1), h - pad.b);
+  ctx.lineTo(xFor(0), h - pad.b);
+  ctx.closePath();
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  ctx.beginPath();
+  series.forEach((v, i) => {
+    const x = xFor(i), y = yFor(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = '#7690ff';
+  ctx.lineWidth = 2.4;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.stroke();
+
+  const last = series[series.length - 1];
+  ctx.beginPath();
+  ctx.arc(xFor(series.length - 1), yFor(last), 4, 0, Math.PI * 2);
+  ctx.fillStyle = last > 0 ? '#28d17c' : last < 0 ? '#ff5d65' : '#f5c84c';
+  ctx.fill();
+}
+
+function calculateMaxDrawdown(source) {
+  const ordered = [...source].sort(sortTradesAsc);
+  let equity = 0, peak = 0, maxDd = 0;
+  ordered.forEach(t => {
+    equity += tradeToR(t);
+    peak = Math.max(peak, equity);
+    maxDd = Math.max(maxDd, peak - equity);
+  });
+  return -maxDd;
+}
+
+function tradeToR(trade) {
+  const value = Number(trade?.rr);
+  if (Number.isFinite(value)) return value;
+  if (trade?.result === 'TP') return 1;
+  if (trade?.result === 'SL') return -1;
+  return 0;
+}
+
+function formatR(value) {
+  const n = Number(value) || 0;
+  const rounded = Math.round(n * 100) / 100;
+  return `${rounded > 0 ? '+' : ''}${rounded}R`;
+}
+
+function sortTradesAsc(a, b) {
+  return `${a.date}|${a.createdAt}`.localeCompare(`${b.date}|${b.createdAt}`);
+}
+
+function sortTradesDesc(a, b) {
+  return `${b.date}|${b.createdAt}`.localeCompare(`${a.date}|${a.createdAt}`);
+}
+
+function formatDate(value) {
+  if (!value) return '—';
+  const [y,m,d] = value.split('-').map(Number);
+  return new Intl.DateTimeFormat('pl-PL', { day: '2-digit', month: 'short', year: 'numeric' }).format(new Date(y, m - 1, d));
+}
+
+function toInputDate(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function getWeekKey(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const week = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+function formatWeekLabel(key) {
+  return key.replace('-W', ' / ');
+}
+
+function cryptoRandomId() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+async function fileToCompressedDataUrl(file) {
+  const imgData = await readFileAsDataUrl(file);
+  const image = await loadImage(imgData);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+  const width = Math.max(1, Math.round(image.width * scale));
+  const height = Math.max(1, Math.round(image.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(image, 0, 0, width, height);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function loadImage(src) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+function openImageDb() {
+  if (imageDbPromise) return imageDbPromise;
+  imageDbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(IMAGE_DB.name, 1);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IMAGE_DB.store)) {
+        db.createObjectStore(IMAGE_DB.store);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return imageDbPromise;
+}
+
+async function saveTradeScreenshots(tradeId, shots) {
+  const db = await openImageDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB.store, 'readwrite');
+    tx.objectStore(IMAGE_DB.store).put(shots, tradeId);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function getTradeScreenshots(tradeId) {
+  const db = await openImageDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB.store, 'readonly');
+    const req = tx.objectStore(IMAGE_DB.store).get(tradeId);
+    req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+    req.onerror = () => reject(req.error);
+  }).catch(() => []);
+}
+
+async function deleteTradeScreenshots(tradeId) {
+  const db = await openImageDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB.store, 'readwrite');
+    tx.objectStore(IMAGE_DB.store).delete(tradeId);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  }).catch(() => false);
+}
+
+
+function playbookImageKey(playbookId) {
+  return `playbook:${playbookId}`;
+}
+
+async function savePlaybookImage(playbookId, src) {
+  return saveTradeScreenshots(playbookImageKey(playbookId), src ? [src] : []);
+}
+
+async function getPlaybookImage(playbookId) {
+  const images = await getTradeScreenshots(playbookImageKey(playbookId));
+  return images[0] || '';
+}
+
+async function deletePlaybookImage(playbookId) {
+  return deleteTradeScreenshots(playbookImageKey(playbookId));
+}
+
+async function clearAllScreenshots() {
+  const db = await openImageDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(IMAGE_DB.store, 'readwrite');
+    tx.objectStore(IMAGE_DB.store).clear();
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = () => reject(tx.error);
+  }).catch(() => false);
+}
+
+
+let toastTimer;
+function toast(message) {
+  const el = $('toast');
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+window.addEventListener('resize', () => {
+  if ($('view-dashboard').classList.contains('active')) drawEquityChart();
+});
