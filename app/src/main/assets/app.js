@@ -41,6 +41,21 @@ const $ = (id) => document.getElementById(id);
 const views = [...document.querySelectorAll('.view')];
 const navButtons = [...document.querySelectorAll('.nav-btn')];
 
+function parseFlexibleNumber(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .replace(/[−–—]/g, '-')
+    .replace(/\s+/g, '')
+    .replace(/[rR]$/, '')
+    .replace(',', '.');
+
+  if (!/^[-+]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) {
+    return NaN;
+  }
+
+  return Number(normalized);
+}
+
 init();
 
 function init() {
@@ -79,7 +94,7 @@ function migrateTrades(source) {
     model: trade.model || '',
     playbookId: trade.playbookId || '',
     playbookName: trade.playbookName || '',
-    rr: Number.isFinite(Number(trade.rr)) ? Number(trade.rr) : (trade.result === 'TP' ? 1 : trade.result === 'SL' ? -1 : 0),
+    rr: Number.isFinite(parseFlexibleNumber(trade.rr)) ? parseFlexibleNumber(trade.rr) : (trade.result === 'TP' ? 1 : trade.result === 'SL' ? -1 : 0),
     confluences: Array.isArray(trade.confluences) ? trade.confluences : [],
     tags: Array.isArray(trade.tags) ? [...new Set(trade.tags.map(tag => String(tag || '').trim()).filter(Boolean))] : [],
     rating: Number(trade.rating || 3),
@@ -92,7 +107,7 @@ function migrateTrades(source) {
     preThesis: trade.preThesis || '',
     preInvalidation: trade.preInvalidation || '',
     preTarget: trade.preTarget || '',
-    preMaxRisk: Number.isFinite(Number(trade.preMaxRisk)) ? Number(trade.preMaxRisk) : null,
+    preMaxRisk: Number.isFinite(parseFlexibleNumber(trade.preMaxRisk)) ? parseFlexibleNumber(trade.preMaxRisk) : null,
     confirmationFilter: normalizeConfirmationFilter(trade.confirmationFilter),
     screenshotCount: Number(trade.screenshotCount || 0),
     createdAt: trade.createdAt || new Date().toISOString()
@@ -105,7 +120,7 @@ function migratePlaybooks(source) {
     name: String(item.name || '').trim(),
     direction: item.direction || 'ANY',
     session: item.session || 'ANY',
-    minRR: item.minRR === '' || item.minRR == null ? null : Number(item.minRR),
+    minRR: item.minRR === '' || item.minRR == null ? null : parseFlexibleNumber(item.minRR),
     conditions: item.conditions || '',
     invalidation: item.invalidation || '',
     target: item.target || '',
@@ -315,7 +330,7 @@ function bindTradeForm() {
 
     const selectedConfluences = [...document.querySelectorAll('#confluenceGrid input:checked')].map(el => el.value);
     const selectedTags = getSelectedTradeTags();
-    const rr = Number(String($('tradeR').value).replace(',', '.'));
+    const rr = parseFlexibleNumber($('tradeR').value);
     if (!Number.isFinite(rr)) {
       toast('Wpisz poprawny wynik w R.');
       return;
@@ -346,7 +361,7 @@ function bindTradeForm() {
       preThesis: $('preThesis').value.trim(),
       preInvalidation: $('preInvalidation').value.trim(),
       preTarget: $('preTarget').value.trim(),
-      preMaxRisk: $('preMaxRisk').value === '' ? null : Number(String($('preMaxRisk').value).replace(',', '.')),
+      preMaxRisk: $('preMaxRisk').value.trim() === '' ? null : parseFlexibleNumber($('preMaxRisk').value),
       confirmationFilter: getConfirmationFilterState(),
       screenshotCount: screenshotFiles.length,
       createdAt: new Date().toISOString()
@@ -664,7 +679,7 @@ function bindPlaybookForm() {
       name,
       direction: $('playbookDirection').value,
       session: $('playbookSession').value,
-      minRR: minRRRaw === '' ? null : Number(String(minRRRaw).replace(',', '.')),
+      minRR: minRRRaw === '' ? null : parseFlexibleNumber(minRRRaw),
       conditions: $('playbookConditions').value.trim(),
       invalidation: $('playbookInvalidation').value.trim(),
       target: $('playbookTarget').value.trim(),
